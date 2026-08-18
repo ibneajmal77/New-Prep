@@ -63,27 +63,6 @@ Some stages are collapsed or hidden by a framework, but they are all there.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-The same thing as a graph:
-
-```mermaid
-flowchart TD
-    A[User request] --> B[Context assembly]
-    B --> C[Tokenizer]
-    C --> D[Model / deployment]
-    D --> E[Decoding]
-    E --> F[Output shaping]
-    F --> G[Validation & retry]
-    G -->|invalid| B
-    G -->|valid| H[Response + telemetry]
-
-    B -.- B1[system prompt · history · retrieved docs · tool schemas]
-    C -.- C1[context window budget]
-    D -.- D1[API · managed platform · self-hosted]
-    E -.- E1[temperature · top-p · max tokens · stop · seed]
-    F -.- F1[JSON schema · function calling · constrained decoding]
-    G -.- G1[schema · groundedness · content filter]
-```
-
 **Why this matters more than any single fact:** every question you will ever be asked about
 LLMs is a question about one of these eight boxes, or about the wiring between two of them.
 "Why is my output non-deterministic?" is a *decoding* question. "Why did it invent a policy
@@ -326,19 +305,71 @@ our organisation. That is Stage 2 and Stage 3.
 
 ### 1. Definition
 
-**Plain English:** A large language model is a very large pattern-completion machine. You give
-it a sequence of text, and it predicts what comes next — one small piece at a time, over and
-over, until it decides to stop.
+**The picture is the definition.** Every arrow below carries the full meaning of the term it
+introduces — read top to bottom and you have the complete concept, no lookup elsewhere required.
 
-**Precisely:** An LLM is a *decoder-only transformer* trained on next-token prediction. Text is
-split into **tokens** by a tokenizer. Each token becomes a vector. Those vectors pass through
-a stack of transformer blocks, each containing a **self-attention** layer (where every token
-looks at every earlier token and weights how much each one matters) and a feed-forward layer.
-The final layer produces a score for every token in the vocabulary; the highest-scoring tokens
-are the most likely continuations. The **context window** is the maximum number of tokens the
-model can hold in one call. An **embedding** is a different use of the same machinery: instead
-of generating text, you take the internal vector representing a piece of text and use it as a
-coordinate in meaning-space.
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                                                                            │
+│   [Text]                    "...annual leave entitlement..."             │
+│      │                                                                    │
+│      ▼                                                                    │
+│   [Tokenizer]  ◄── the component that converts text to tokens and back,  │
+│      │              using BPE (Byte-Pair Encoding): built by scanning a  │
+│      │              huge corpus and repeatedly merging the most frequent │
+│      │              adjacent character-pairs into single units          │
+│      ▼                                                                    │
+│   [Tokens]  ◄── the unit a model actually reads and writes — roughly     │
+│      │           3/4 of an English word. Drawn from the VOCABULARY, the  │
+│      │           model's complete set of known tokens (100k-200k)       │
+│      ▼                                                                    │
+│   [Token vectors]  ◄── an EMBEDDING: a fixed-length vector of numbers    │
+│      │                  representing the meaning of a piece of text —    │
+│      │                  here, one token, looked up per token             │
+│      ▼                                                                    │
+│   [Transformer blocks]  ◄── the neural network architecture under        │
+│      │                       essentially every modern LLM. Each block    │
+│      │                       runs ATTENTION — every token looks at       │
+│      │                       every earlier token and weighs how much     │
+│      │                       each one matters — then a feed-forward      │
+│      │                       layer, stacked 30-100 times                 │
+│      ▼                                                                    │
+│   [Logits]  ◄── the raw, unnormalized score the model produces for       │
+│      │           every single token in the vocabulary                   │
+│      ▼                                                                    │
+│   [Softmax + sample]  ◄── SOFTMAX turns logits into probabilities that   │
+│      │                     sum to 1; SAMPLING then randomly picks one     │
+│      │                     token from that probability distribution      │
+│      ▼                                                                    │
+│   [Next token]  ──► fed back into [Text], and the whole loop runs        │
+│                       again — this is AUTOREGRESSIVE generation: one     │
+│                       token at a time, each conditioned on every token   │
+│                       that came before it, until the model stops         │
+│                                                                            │
+│   everything this loop can hold at once — input plus output — is the     │
+│   CONTEXT WINDOW: the maximum number of tokens the model can handle in   │
+│   one call                                                                │
+│                                                                            │
+│   - - - - - - - - - the OTHER use of the same machinery - - - - - - -   │
+│                        (nothing below this line is generated)            │
+│                                                                            │
+│   [Token vectors]  ──► [Embedding]  ◄── same word, second meaning: the   │
+│                                           internal vector for a whole      │
+│                                           piece of text, kept and used     │
+│                                           as a coordinate in meaning-      │
+│                                           space instead of being turned    │
+│                                           into more text                  │
+│                                                                            │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+**Plain English:** a large language model is a very large pattern-completion machine. You give
+it a sequence of text, and it predicts what comes next — one small piece at a time, over and
+over, until it decides to stop. The diagram above is that machine, box by box.
+
+**Precisely:** an LLM is a *decoder-only transformer* trained on next-token prediction — the
+exact mechanism is the loop drawn above, and an embedding (bottom of the box) is the same
+machinery used one step short of generating anything.
 
 ### 2. Scenario
 
@@ -393,68 +424,191 @@ entitlement" sits close to the vector for "vacation days policy" and far from th
 "fire evacuation procedure" — even though they share no words. That closeness is what makes
 semantic search work.
 
-### 4. How it works
+### 4. How it works — the diagram, taken apart piece by piece
 
-**Tokenization (BPE).** The tokenizer is built by scanning a huge corpus and repeatedly merging
-the most frequent adjacent character pairs into single units. Common words end up as one token
-(`·the`); rare words split into pieces (`·entitle` + `ment`); unusual strings split into many.
-This is why models are bad at counting the letters in a word — they never see letters, they see
-tokens. It's also why a typo can change the token count dramatically.
+Section 1 showed the whole pipeline in one picture. This section opens each box in it.
 
-**Attention, in one paragraph.** Every token produces three vectors: a **query** (what am I
-looking for?), a **key** (what do I offer?), and a **value** (what do I contribute?). To decide
-how much token A should care about token B, you take the dot product of A's query with B's key.
-Run that across all pairs, scale it, softmax it into weights that sum to 1, and use those
-weights to mix the value vectors together. That mixture becomes A's new representation. Do it
-with several independent sets of query/key/value in parallel (**multi-head attention**), so
-different heads can track different relationships — one head follows grammatical subjects,
-another tracks quoted spans, another long-range references.
+**4a. Tokenization (BPE)**
 
-```mermaid
-flowchart LR
-    subgraph One transformer block
-        direction TB
-        I[Token vectors in] --> A[Multi-head self-attention]
-        A --> N1[Add and normalise]
-        N1 --> F[Feed-forward network]
-        F --> N2[Add and normalise]
-        N2 --> O[Token vectors out]
-    end
-    O --> Next[Next block, x 30-100 times]
+```
+   HOW IT'S BUILT: scan a huge corpus, repeatedly merge the most frequent
+   adjacent character-pair into one unit. Keep doing that, and you get:
+
+   "the"            (seen constantly)    ──►  merged early, over and over  ──►  1 token: ·the
+
+   "entitlement"    (seen rarely)        ──►  only some merges happen      ──►  2 tokens: ·entitle + ment
+
+   random string    (never seen before)  ──►  almost no merges survive     ──►  many tokens, near single chars
+
+   ◄── this is why models are bad at counting letters in a word — they
+        never see letters, only tokens — and why a typo can blow up your
+        token count: a misspelled word drops out of the "fully merged"
+        bucket and suddenly costs several tokens instead of one
 ```
 
-**Two crucial consequences of attention:**
+**4b. Attention — how one token decides what to look at**
 
-1. **Cost grows with the square of the sequence.** Every token attends to every other token, so
-   doubling your prompt roughly quadruples attention work. This is the real reason long
-   contexts are expensive and slow, and why "just put everything in the prompt" stops working.
-2. **Causal masking.** In a generative model, a token may only attend to tokens *before* it.
-   That's what makes generation left-to-right and one-directional.
+```
+        [Token A]                          [Token B]
+           │                                   │
+           ▼                                   ▼
+     produces a QUERY                 produces a KEY  and  a VALUE
+     "what am I looking for?"         "what I offer" / "what I contribute"
+           │                                   │
+           └───────────► dot product ◄─────────┘
+                              │
+                              ▼
+                  scale, then softmax across every token B
+                  (turns raw scores into weights that sum to 1)
+                              │
+                              ▼
+          weight × value, summed over every B  ──►  [Token A's new representation]
 
-**Prefill vs decode — the source of all latency intuition.** A model call has two phases:
+   ◄── do this with several independent query/key/value sets in
+        parallel — MULTI-HEAD ATTENTION — so different heads can
+        specialise in different relationships:
+```
 
-- **Prefill:** the whole input is processed in one parallel pass. This determines **time to
-  first token (TTFT)**. Long prompt → slow start.
-- **Decode:** tokens are generated one at a time, each requiring a full forward pass. This
-  determines **tokens per second**. Long answer → slow finish.
+```
+                          [Same token vectors]
+             ┌────────────────┬────────────────┬────────────────┐
+             ▼                 ▼                 ▼                ▼
+        [Head 1]           [Head 2]          [Head 3]         [Head ...]
+       grammatical          quoted           long-range        dozens more,
+        subjects            spans            references        in parallel
+             │                 │                 │                │
+             └────────────────┴────────────────┴────────────────┘
+                                       ▼
+                       concatenate + project into one
+                            combined representation,
+                     which flows through the rest of the block:
+```
 
-The **KV cache** stores the key and value vectors of tokens already processed so they're not
-recomputed for every new token. It's why generation doesn't get quadratically slower as it
-goes — and it's why the KV cache, not the weights, is often what exhausts GPU memory when
-self-hosting long-context workloads.
+```
+┌───────────────────────────────────────────┐
+│           ONE TRANSFORMER BLOCK             │
+│                                             │
+│   [Token vectors in]                       │
+│        │                                   │
+│        ▼                                   │
+│   [Multi-head self-attention]  ◄── the diagram above, run once     │
+│        │                                   │
+│        ▼                                   │
+│   [Add & normalise]                        │
+│        │                                   │
+│        ▼                                   │
+│   [Feed-forward network]                   │
+│        │                                   │
+│        ▼                                   │
+│   [Add & normalise]                        │
+│        │                                   │
+│        ▼                                   │
+│   [Token vectors out]                      │
+│                                             │
+└──────────────────┬──────────────────────────┘
+                    │
+                    ▼
+         repeat this block 30-100 times
+```
 
-**Context window** is the total budget: system prompt + history + retrieved documents + tool
-schemas + the generated answer. All of it competes for the same space. A "128k context" model
-with a 120k-token prompt has 8k left to answer in.
+**Two consequences that follow directly from how attention works:**
 
-Two things people get wrong about big context windows:
+```
+   sequence length N        ──►   N x N attention pairs to compute
+   double it: length 2N     ──►   (2N) x (2N) = 4x the pairs to compute
 
-- **Fitting is not the same as using.** Models attend unevenly across a long context —
-  information in the middle is recalled less reliably than information at the start or end.
-  This is the "lost in the middle" effect. Placement matters.
-- **Bigger is not cheaper.** You pay for every input token on every call.
+   ◄── COST GROWS WITH THE SQUARE OF THE SEQUENCE — every token attends
+        to every other token. This is the real reason long contexts are
+        expensive and slow, and why "just put everything in the prompt"
+        stops working
+```
 
-**Embeddings vs generation.** Same architecture family, different head, entirely different job:
+```
+                    token being attended TO
+                    T1   T2   T3   T4
+  token   T1        X    ·    ·    ·
+  asking  T2        X    X    ·    ·
+          T3        X    X    X    ·
+          T4        X    X    X    X
+
+  X = allowed, · = hidden (the future)
+
+  ◄── CAUSAL MASKING: in a generative model, a token may only attend to
+       tokens before it. That's what makes generation left-to-right and
+       one-directional — T2 can never see T3 or T4, because they haven't
+       been generated yet
+```
+
+**4c. Prefill vs decode — the source of all latency intuition**
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                                                                       │
+│   PREFILL — the whole input processed in one parallel pass           │
+│   [Whole input]  ──► determines TTFT (time to first token):          │
+│                        long prompt = slow start                      │
+│                                                                       │
+│   ──────────────────────────────  then  ─────────────────────────── │
+│                                                                       │
+│   DECODE — tokens generated one at a time, each a full forward pass  │
+│   [forward pass] ──► 1 token ──► [forward pass] ──► 1 token ──► ...  │
+│                        determines tokens/sec:                        │
+│                        long answer = slow finish                     │
+│                                                                       │
+│   KV CACHE  ◄── stores the key/value vectors of tokens already       │
+│   processed so decode never recomputes them. Why generation doesn't  │
+│   get quadratically slower as it goes — and why the KV cache, not    │
+│   the weights, is often what exhausts GPU memory when self-hosting   │
+│   long-context workloads                                             │
+│                                                                       │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**4d. Context window — the shared budget**
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│        CONTEXT WINDOW — e.g. 128,000 tokens, ALL drawn from one pool │
+│                                                                       │
+│   [system prompt] + [chat history] + [retrieved docs] +              │
+│   [tool schemas] + [reserved for the answer]  =  the whole budget    │
+│                                                                       │
+│   ◄── a "128k" model with a 120k-token prompt has 8k left to answer  │
+│        in. BIGGER IS NOT CHEAPER: you pay for every input token on   │
+│        every call, regardless of window size                        │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+```
+recall reliability, by position in a long context  ("lost in the middle")
+
+ high |##                                                  ##|
+      |  ####                                          ####  |
+      |      ########                            ########    |
+  low |              ############################             |
+      +--------------------------------------------------------+
+        start of context         buried in the middle        end
+
+◄── FITTING IS NOT THE SAME AS USING: models attend unevenly across a
+     long context — information buried in the middle is recalled less
+     reliably than information at the start or end. Placement matters.
+```
+
+**4e. Embeddings vs generation — same family, different job**
+
+```
+   [8,000 documents]
+          │
+          ▼   embedding model (cheap, ~tens of ms)
+   [top 5 relevant paragraphs]
+          │
+          ▼   generation model (expensive, hundreds of ms+)
+   [grounded answer]
+
+   ◄── this funnel is the whole basis of RAG: use the cheap embedding
+        model to find the right paragraphs, then spend the expensive
+        generation model on those few paragraphs only
+```
 
 | | Generation model | Embedding model |
 |---|---|---|
@@ -465,35 +619,44 @@ Two things people get wrong about big context windows:
 | **Typical latency** | hundreds of ms to seconds | tens of ms |
 | **Example dimension** | — | 1536 or 3072 numbers |
 
-The relationship between them is the whole basis of RAG: use the cheap embedding model to
-*find* the right five paragraphs, then spend the expensive generation model on those five
-paragraphs only.
-
 ### 5. Where it fits
 
 ```
-   request
-      │
-   context assembly
-      │
-▶  TOKENIZER  ◀ ─── you are here
-      │
-   model / deployment       ◄─ and here (the transformer itself)
-      │
-   decoding
-      │
-   output shaping
-      │
-   validation & retry
-      │
-   response + telemetry
+┌───────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   [8,000 documents]                                                     │
+│         │                                                              │
+│         ▼  embedding model (offline, once) ◄── this whole row runs on  │
+│   [Vector index]                                the CHEAP embedding    │
+│         │                                       model, not the one     │
+│   [User request]                                answering the question │
+│         │                                                              │
+│         ▼                                                              │
+│   [Context assembly]  ◄── embedding model (per query) pulls the        │
+│         │                  top-k matches from the vector index          │
+│         ▼                                                              │
+▶  [TOKENIZER]  ◀── you are here: text becomes a billable, budgeted      │
+│         │           sequence of tokens                                 │
+│         ▼                                                              │
+│   [MODEL / DEPLOYMENT]  ◄── and here: the transformer itself,          │
+│         │                    running the whole loop from Section 1      │
+│         ▼                                                              │
+│   [Decoding]                                                            │
+│         │                                                              │
+│         ▼                                                              │
+│   [Output shaping]                                                      │
+│         │                                                              │
+│         ▼                                                              │
+│   [Validation & retry]                                                  │
+│         │                                                              │
+│         ▼                                                              │
+│   [Response + telemetry]                                                │
+│                                                                         │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
 **In:** assembled text (prompt + history + documents + tool schemas).
 **Out:** a token sequence, a token count, and a decision about whether it fits the window.
-
-Embeddings sit *before* the diagram entirely — they are how the "retrieved documents" arrive at
-the context-assembly stage in the first place.
 
 ### 6. Libraries & code
 
@@ -609,17 +772,59 @@ print(similarity(vectors[0], vectors[2]))            # ~0.1 : unrelated
 
 ### 1. Definition
 
-**Plain English:** The model never picks a next word. It produces a *score for every possible
-next word*, and then a separate step chooses one. These knobs control that choosing step —
-how adventurous it is, when it stops, and whether it does the same thing twice.
+**The picture is the definition** — this is the choosing step that runs once per generated
+token, after the model itself has already produced its scores:
 
-**Precisely:** The model outputs **logits** — one raw score per token in the vocabulary.
-**Temperature** divides those logits before they're converted to probabilities by softmax,
-flattening (high) or sharpening (low) the distribution. **top-p** (nucleus sampling) then
-discards the long tail, keeping only the most likely tokens whose probabilities sum to *p*.
-A token is sampled from what remains. **max_tokens** caps how many times this loop runs.
-**Stop sequences** end the loop early when specific text appears. **Seed** requests that the
-random draw be repeatable — on a best-effort basis that is not a guarantee.
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   [Model forward pass]                                                 │
+│         │                                                              │
+│         ▼                                                              │
+│   [Logits]  ◄── LOGITS: one raw score per token in the vocabulary      │
+│         │                                                              │
+│         ▼                                                              │
+│   [÷ temperature]  ◄── TEMPERATURE divides every logit before softmax  │
+│         │              — high flattens the distribution (more          │
+│         │              adventurous), low sharpens it (more              │
+│         │              deterministic). T=0 skips sampling entirely      │
+│         │              and just takes the max directly — "greedy       │
+│         │              decoding"                                        │
+│         ▼                                                              │
+│   [Softmax]  ◄── SOFTMAX turns logits into probabilities that sum to 1 │
+│         │                                                              │
+│         ▼                                                              │
+│   [top-p / top-k cut]  ◄── TOP-P (nucleus sampling) keeps the          │
+│         │                   smallest set of tokens whose probabilities │
+│         │                   sum to p and discards the rest; TOP-K just │
+│         │                   keeps the k best. top-p adapts: confident  │
+│         │                   model = narrow nucleus, uncertain = wide   │
+│         ▼                                                              │
+│   [Sample one token]  ◄── SAMPLING: pick one token at random,          │
+│         │                  weighted by what's left of the distribution │
+│         ▼                                                              │
+│   stop sequence hit? ──► finish_reason = "stop"                        │
+│   max_tokens hit?    ──► finish_reason = "length"  ◄── MAX_TOKENS caps │
+│                            OUTPUT only, not input — and it's a hard    │
+│                            cut, not a graceful one: the model doesn't  │
+│                            know it's coming, so it can truncate mid-   │
+│                            sentence or mid-JSON                        │
+│   neither?           ──► feed back into [Model forward pass], loop     │
+│                            again for the next token                    │
+│                                                                         │
+│   SEED  ◄── requests that the random draw in [Sample one token] be     │
+│              repeatable — best-effort only, not a guarantee            │
+│                                                                         │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+**Plain English:** the model never picks a next word — it scores every possible next word, and
+a separate step chooses one. These knobs control that choosing step: how adventurous it is,
+when it stops, and whether it does the same thing twice.
+
+**Precisely:** the loop above runs once per generated token. Temperature and top-p/top-k shape
+and truncate the distribution before sampling; max_tokens and stop sequences are the two ways
+the loop ends; seed asks for — but cannot guarantee — repeatability.
 
 ### 2. Scenario
 
@@ -673,36 +878,11 @@ The stop text itself is **not included** in the output. People lose an hour to t
 
 ### 4. How it works
 
-The generation loop, one iteration:
+Section 1's diagram is the whole mechanism. The one thing it can't show is *why*, even at
+`temperature=0`, you don't reliably get the same output twice — and that's worth understanding
+properly, because it changes what you can promise downstream.
 
-```mermaid
-flowchart LR
-    A[Model forward pass] --> B[Logits: one score<br/>per vocabulary token]
-    B --> C[Divide by temperature]
-    C --> D[Softmax to probabilities]
-    D --> E[Truncate with top-p / top-k]
-    E --> F[Sample one token]
-    F --> G{Stop?}
-    G -->|stop sequence hit| H[finish_reason = stop]
-    G -->|max_tokens hit| I[finish_reason = length]
-    G -->|end-of-text token| H
-    G -->|no| A
-```
-
-**Temperature** divides each logit by T before softmax. Low T exaggerates differences between
-scores (the leader wins by more); high T compresses them (underdogs get a real chance). T=0 is
-implemented as taking the maximum directly — often called *greedy decoding*.
-
-**top-p** sorts tokens by probability, accumulates from the top, and cuts off once the running
-total reaches p. Its virtue over **top-k** (keep the best k) is that it adapts: when the model
-is confident, the nucleus is one or two tokens; when genuinely uncertain, it widens.
-
-**max_tokens** caps *output only*. Two things follow. It doesn't make your input cheaper. And
-it is a hard cut, not a graceful ending — the model doesn't know it's coming, so hitting the
-cap truncates mid-sentence and, worse, mid-JSON.
-
-**Why determinism is hard even at temperature 0.** This is the subtle part, and it's worth
-understanding properly:
+**Why determinism is hard even at temperature 0:**
 
 1. **Floating-point addition isn't associative.** `(a+b)+c` can differ from `a+(b+c)` in the
    last bits. GPUs sum in whatever order the kernel schedules, and that order depends on batch
@@ -730,7 +910,9 @@ variation becomes harmless.
       │
    model / deployment
       │
-▶  DECODING  ◀ ─── you are here
+▶  DECODING  ◀── you are here: turns the model's probability
+                  distribution into one chosen token — the loop in
+                  Section 1, run once per generated token
       │
    output shaping
       │
@@ -859,15 +1041,45 @@ for alt in inspect.choices[0].logprobs.content[0].top_logprobs:
 
 ### 1. Definition
 
-**Plain English:** Choosing which model to use is an engineering trade-off with three axes:
-how good it is, how much it costs, and how fast it answers. You can't max all three, and the
-best model is almost never the biggest one.
+**The picture is the definition** — every model choice trades off three axes at once, which is
+why real systems route, rather than pick one model for everything:
 
-**Precisely:** Model selection means matching a *task's difficulty profile* to a model's
-capability tier, price per million tokens, and latency characteristics — then deciding whether
-to consume it through a **hosted API**, a **managed cloud platform**, or **self-hosted
-open weights**. In a real system this is rarely one choice: mature applications route different
-tasks to different models.
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   CAPABILITY  ◄── how good it is: multi-step reasoning, long-context   │
+│                    recall, instruction-following under pressure,       │
+│                    code, non-English languages. Gap between tiers is   │
+│                    small on easy tasks, large on hard ones              │
+│                                                                         │
+│   COST        ◄── $ per million tokens, input and output priced        │
+│                    separately; output typically 3-5x the input price.  │
+│                    Reasoning models add a third, hidden category —     │
+│                    "thinking" tokens you pay for but never see          │
+│                                                                         │
+│   LATENCY     ◄── two different numbers: TTFT (time to first token,    │
+│                    driven by input length / prefill) and tokens/sec    │
+│                    (driven by output length / decode). A small model   │
+│                    at 200ms TTFT feels instant; a frontier model at    │
+│                    3s TTFT feels broken in a chat UI — even with the   │
+│                    better answer                                        │
+│                                                                         │
+│   You cannot maximise all three — bigger and smarter is slower and     │
+│   pricier. So mature systems don't pick ONE model, they ROUTE:         │
+│                                                                         │
+│   [Task: classify]  ──► cheapest model that passes evaluation          │
+│   [Task: rewrite]   ──► cheapest model that passes evaluation          │
+│   [Task: answer]    ──► the frontier tier, because it actually needs it│
+│   [Task: verify]    ──► cheapest model that passes evaluation          │
+│                                                                         │
+│   ◄── ROUTING: match each task's difficulty to the cheapest model      │
+│        that passes it, consumed via a hosted API, a managed cloud      │
+│        platform, or self-hosted open weights. Usually the single       │
+│        largest cost lever in the system — bigger than caching,         │
+│        bigger than prompt tuning                                       │
+│                                                                         │
+└───────────────────────────────────────────────────────────────────────┘
+```
 
 ### 2. Scenario
 
@@ -922,39 +1134,23 @@ you bolt on later.
 
 ### 4. How it works
 
-Three axes, and what actually drives each:
+Section 1's diagram covers the three trade-off axes. What it doesn't show is *how* you actually
+consume the model you've chosen — that's a separate decision, along its own trade-off:
 
-**Capability.** Follows model size and training, and shows up most on multi-step reasoning,
-long-context recall, instruction-following under pressure, code, and non-English languages.
-The gap between tiers is small on easy tasks and large on hard ones — which is precisely why
-routing works.
-
-**Cost.** Priced per million tokens, separately for input and output; output is typically 3–5×
-the input price. Reasoning models add a third category — hidden "thinking" tokens you pay for
-but never see — which can dominate the bill on hard prompts.
-
-**Latency.** Two separate numbers, and conflating them causes bad decisions:
-
-- **TTFT** (time to first token) — dominated by prefill, so by input length. Streaming makes
-  this the number the user actually feels.
-- **Tokens/sec** — how fast the answer flows once started. Smaller models are dramatically
-  faster here.
-
-A small model with 200ms TTFT feels instant; a frontier model with 3s TTFT feels broken in a
-chat UI — even when its answer is better.
-
-**The three consumption models:**
-
-```mermaid
-flowchart TD
-    Q{How will you consume the model?}
-    Q --> A[Hosted API<br/>OpenAI, Anthropic direct]
-    Q --> B[Managed cloud platform<br/>Azure OpenAI, Bedrock, Vertex]
-    Q --> C[Self-hosted open weights<br/>vLLM, Ollama on your GPUs]
-
-    A --> A1[Fastest to start<br/>Newest models first<br/>Least control over data location]
-    B --> B1[Enterprise identity and networking<br/>Regional and residency control<br/>Slight lag on new models]
-    C --> C1[Full control, no data egress<br/>Cheapest at very high volume<br/>You own GPUs, scaling, safety]
+```
+                    How will you consume the model?
+                                  │
+        ┌───────────────────────┼───────────────────────┐
+        ▼                        ▼                        ▼
+   [Hosted API]           [Managed cloud platform]  [Self-hosted open weights]
+   OpenAI, Anthropic       Azure OpenAI, Bedrock,     vLLM, Ollama, on your own
+   direct                  Vertex                     GPUs
+        │                        │                        │
+        ▼                        ▼                        ▼
+   fastest to start,       enterprise identity and    full control, no data
+   newest models first,    networking, regional and   egress, cheapest at very
+   least control over      residency control,          high volume — but you own
+   data location           slight lag on new models    GPUs, scaling, safety
 ```
 
 **The selection procedure that actually works**, and the one you should be able to describe:
@@ -978,7 +1174,8 @@ flowchart TD
       │
    tokenizer
       │
-▶  MODEL / DEPLOYMENT  ◀ ─── you are here
+▶  MODEL / DEPLOYMENT  ◀── you are here: which model answers this call,
+                            and what it costs — the choice in Section 1
       │
    decoding
       │
@@ -1097,17 +1294,39 @@ def with_fallback(messages: list):
 
 ### 1. Definition
 
-**Plain English:** Most of the time you don't want prose — you want data your code can use. A
+**The picture is the definition** — three ways to get a shape back, in ascending order of
+guarantee:
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   [1. Ask in the prompt]        ◄── "Reply with JSON." NO GUARANTEE —  │
+│              │                       the model is free to add prose,   │
+│              │                       code fences, or the wrong types   │
+│              ▼                                                         │
+│   [2. Function / tool calling]  ◄── you supply a JSON Schema for a     │
+│              │                       tool; the model emits ARGUMENTS   │
+│              │                       matching it instead of writing    │
+│              │                       text — reliable shape, though the │
+│              │                       model still chose the values      │
+│              ▼                                                         │
+│   [3. Constrained decoding]     ◄── the decoder is prevented from      │
+│                                       emitting any token that would    │
+│                                       break the schema — a STRUCTURAL  │
+│                                       guarantee, not a probabilistic   │
+│                                       one                              │
+│                                                                         │
+│   wrapped around all three ──► [Validate-and-repair loop]  ◄── parse   │
+│                                  the result; on failure, feed the      │
+│                                  exact error back for a bounded number │
+│                                  of retries                            │
+│                                                                         │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+**Plain English:** most of the time you don't want prose — you want data your code can use. A
 structured output is the model returning a shape you defined, reliably enough that the next
 line of your program can just use it.
-
-**Precisely:** Structured output means constraining generation to conform to a schema. Three
-mechanisms, in ascending order of guarantee: **asking in the prompt** (no guarantee),
-**function/tool calling** (the model emits arguments matching a JSON Schema you supplied), and
-**constrained decoding** (the decoder is prevented from emitting any token that would break the
-schema — a structural guarantee, not a probabilistic one). Around all three sits a
-**validate-and-repair loop** that parses the result, and on failure feeds the error back for a
-bounded number of retries.
 
 ### 2. Scenario
 
@@ -1168,16 +1387,16 @@ solves the first, and only the first.
 
 ### 4. How it works
 
-**Function calling.** You pass a list of tool definitions, each with a JSON Schema for its
-parameters. Those schemas are injected into the model's context. The model, instead of emitting
-prose, emits a structured call with an arguments object. The API returns it in a `tool_calls`
-field. Nothing is executed automatically — *your code* decides whether to run anything, which is
-the security boundary of the entire feature.
+**Function calling, mechanically:** you pass a list of tool definitions, each with a JSON
+Schema for its parameters — those schemas are what's injected into the model's context in
+Section 1's step 2. The model, instead of emitting prose, emits a structured call with an
+arguments object, returned in a `tool_calls` field. Nothing is executed automatically — *your
+code* decides whether to run anything, which is the security boundary of the entire feature.
 
-**Constrained decoding — the mechanism worth understanding.** Recall from B2 that at each step
-the model produces a probability over the whole vocabulary. Constrained decoding inserts a
-filter: given the schema and the tokens generated so far, compute which tokens are *legal next*,
-and set every illegal token's probability to zero before sampling.
+**Constrained decoding, worked example** — the tokens that would violate the schema are never
+selectable in the first place, which is why strict mode is a guarantee rather than a strong
+tendency (the same technique as grammar-constrained generation in `outlines` and llama.cpp's
+GBNF grammars):
 
 ```
 Schema requires:  {"total": <number>, ...}
@@ -1186,35 +1405,53 @@ Legal next tokens: digits, '-', '.'          ← everything else is masked out
 Result:           it is structurally impossible to emit "AED" here
 ```
 
-This is why strict mode is a guarantee rather than a strong tendency. It's the same technique as
-grammar-constrained generation in `outlines` and llama.cpp's GBNF grammars.
+**Practical constraints of strict schema modes** (*verify current details per provider*):
 
-Practical constraints of strict schema modes (*verify current details per provider*): only a
-subset of JSON Schema is supported; every property usually must be listed as required (use a
-nullable union to express "optional"); `additionalProperties: false` is typically mandatory;
-deeply nested or recursive schemas may be rejected; and the first call with a new schema can
-carry extra latency while the grammar is compiled and cached.
+- Only a subset of JSON Schema is supported.
+- Every property usually must be listed as required (use a nullable union to express "optional").
+- `additionalProperties: false` is typically mandatory.
+- Deeply nested or recursive schemas may be rejected.
+- The first call with a new schema can carry extra latency while the grammar is compiled and
+  cached.
 
 **The validate-and-repair loop**, which you need regardless of tier:
 
-```mermaid
-flowchart TD
-    A[Call model with schema] --> B[Parse JSON]
-    B -->|parse error| R{Retries left?}
-    B -->|ok| C[Validate against model class]
-    C -->|validation error| R
-    C -->|ok| D[Business rule checks<br/>totals add up, date is plausible,<br/>currency is one we accept]
-    D -->|fails| R
-    D -->|ok| E[Return typed object]
-    R -->|yes| F[Append the exact error text<br/>to the conversation and retry]
-    F --> A
-    R -->|no| G[Fail closed:<br/>route to human review]
 ```
-
-Two rules for that loop. **Feed the actual error text back** — "field 'currency' is required"
-gives the model something to act on, "invalid output" does not. And **bound the retries** at two
-or three, then fail into a human path. An unbounded repair loop is a cost incident waiting to
-happen.
+┌───────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   [Call model with schema]                                             │
+│         │                                                              │
+│         ▼                                                              │
+│   [Parse JSON]                            ✕ parse error ──────┐        │
+│         │ ok                                                   │        │
+│         ▼                                                      │        │
+│   [Validate against model class]          ✕ validation error ──┤        │
+│         │ ok                                                   │        │
+│         ▼                                                      │        │
+│   [Business rule checks]  ◄── totals add up, date is plausible,│        │
+│         │ ok                  currency is one we accept        │        │
+│         │                                        ✕ fails ──────┤        │
+│         ▼                                                      ▼        │
+│   [Return typed object]                                 retries left?   │
+│                                                             │       │    │
+│                                                            yes      no   │
+│                                                             │       │    │
+│                                                             ▼       ▼    │
+│                                          [Append the EXACT   [Fail      │
+│                                           error text to the   closed:   │
+│                                           conversation,        route to │
+│                                           and retry]           human    │
+│                                                 │              review]  │
+│                                                 └──► back to [Call model│
+│                                                       with schema]      │
+│                                                                         │
+│   ◄── two rules: feed the ACTUAL error text back ("field 'currency'    │
+│        is required" gives the model something to act on — "invalid     │
+│        output" does not), and BOUND the retries at two or three. An    │
+│        unbounded repair loop is a cost incident waiting to happen      │
+│                                                                         │
+└───────────────────────────────────────────────────────────────────────┘
+```
 
 ### 5. Where it fits
 
@@ -1229,7 +1466,7 @@ happen.
       │
    decoding                ◄─ constrained decoding masks illegal tokens here
       │
-▶  OUTPUT SHAPING  ◀ ─── you are here
+▶  OUTPUT SHAPING  ◀── you are here
       │
    validation & retry      ◄─ and here (the repair loop)
       │
@@ -1378,20 +1615,35 @@ def extract_with_repair(text: str, max_attempts: int = 3) -> Invoice:
 
 ### 1. Definition
 
-**Plain English:** Four different ways to make a model do what you want. Prompting tells it.
-RAG shows it the facts. Fine-tuning trains it into a habit. Distillation teaches a cheaper
-model to copy an expensive one.
+**The picture is the definition** — four ways to change what the model does, from most to
+least reversible:
 
-**Precisely:**
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   [PROMPTING]       ◄── change the instructions and examples in the    │
+│                          context. No training, instant, reversible     │
+│                                                                         │
+│   [RAG]              ◄── Retrieval-Augmented Generation: fetch         │
+│                           relevant documents at query time and place   │
+│                           them in the context, so the answer is        │
+│                           grounded in YOUR current data                │
+│                                                                         │
+│   [FINE-TUNING]        ◄── continue training the model's weights on    │
+│                             your own input/output pairs, so the        │
+│                             desired behaviour becomes intrinsic and    │
+│                             no longer needs explaining in the prompt   │
+│                                                                         │
+│   [DISTILLATION]         ◄── use a large model to generate training    │
+│                               data, then fine-tune a small model on    │
+│                               it — keep most of the quality at a       │
+│                               fraction of the cost and latency         │
+│                                                                         │
+└───────────────────────────────────────────────────────────────────────┘
+```
 
-- **Prompting** — change the instructions and examples in the context. No training, instant,
-  reversible.
-- **RAG (Retrieval-Augmented Generation)** — fetch relevant documents at query time and place
-  them in the context, so the answer is grounded in *your* current data.
-- **Fine-tuning** — continue training the model's weights on your own input/output pairs, so
-  the desired behaviour becomes intrinsic and no longer needs to be explained in the prompt.
-- **Distillation** — use a large model to generate training data, then fine-tune a small model
-  on it, so you keep most of the quality at a fraction of the cost and latency.
+**Plain English:** prompting tells the model. RAG shows it the facts. Fine-tuning trains it
+into a habit. Distillation teaches a cheaper model to copy an expensive one.
 
 ### 2. Scenario
 
@@ -1448,24 +1700,28 @@ show that prompting has plateaued.**
 
 ### 4. How it works
 
-```mermaid
-flowchart TD
-    S{What is actually wrong?} 
-    S -->|It lacks facts, or the facts change| R[RAG]
-    S -->|It behaves or formats wrongly| B{Have you exhausted prompting?}
-    S -->|It is too slow or too expensive| D{Is quality currently acceptable?}
-    S -->|It cannot do the task at all| M[Try a more capable model FIRST]
+```
+   WHAT IS ACTUALLY WRONG?
+   │
+   ├─ lacks facts, or the facts change
+   │     └──► [RAG]
+   │
+   ├─ behaves or formats wrongly
+   │     └─ have you exhausted prompting?
+   │           ├─ no  ──► [Prompting: restructure, few-shot examples, clearer constraints]
+   │           └─ yes, and you have 500+ examples ──► [Fine-tuning / LoRA]
+   │
+   ├─ too slow or too expensive
+   │     └─ is quality currently acceptable?
+   │           ├─ yes ──► [Distillation: generate data from the big model, fine-tune a small one]
+   │           └─ no  ──► try a more capable model first (below)
+   │
+   └─ cannot do the task at all
+         └──► [Try a MORE CAPABLE model FIRST]
 
-    B -->|No| P[Prompting:<br/>restructure, few-shot examples,<br/>clearer constraints]
-    B -->|Yes, and you have 500+ examples| F[Fine-tuning / LoRA]
-
-    D -->|Yes| DI[Distillation:<br/>generate data from the big model,<br/>fine-tune a small one]
-    D -->|No| M
-
-    R --> C[These combine.<br/>Most mature systems use<br/>prompting + RAG,<br/>and sometimes a small fine-tune]
-    P --> C
-    F --> C
-    DI --> C
+   ◄── every path above converges: these COMBINE. Most mature systems run
+        prompting + RAG, and sometimes a small fine-tune on top — it's
+        rarely just one of these
 ```
 
 **Why fine-tuning doesn't reliably install facts.** Training adjusts weights to make your
@@ -1487,10 +1743,6 @@ window, where attention can read it verbatim — which is also what makes citati
 that pass review, fine-tune a small model on those pairs. You are not copying weights — you are
 copying *behaviour on your distribution*. The typical result is a model at roughly frontier
 quality on your narrow task, at small-model cost and latency.
-
-**They compose, and in production they usually do:** a good system prompt (prompting) + current
-documents retrieved per query (RAG) + optionally a small fine-tune for house format. These are
-not competing options; the question is only which one your current problem needs.
 
 ### 5. Where it fits
 
@@ -1637,20 +1889,36 @@ job = client.fine_tuning.jobs.create(
 
 ### 1. Definition
 
-**Plain English:** Three related questions about running models yourself. *LoRA*: how to train
-a model without retraining the whole thing. *Quantization*: how to squeeze a model onto
-hardware you can afford. *Self-hosting*: whether to run it on your own machines at all.
+**The picture is the definition** — three related questions about running models yourself:
 
-**Precisely:**
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   [LoRA / PEFT]        ◄── Parameter-Efficient Fine-Tuning: train a    │
+│                             small number of new parameters while the   │
+│                             base model stays frozen. LoRA is the       │
+│                             dominant method — inject a pair of low-    │
+│                             rank matrices alongside existing weight    │
+│                             matrices and train only those              │
+│                                                                         │
+│   [Quantization]        ◄── store weights at lower numeric precision   │
+│                              (16-bit → 8-bit → 4-bit) to cut memory     │
+│                              and increase speed, at some cost in       │
+│                              accuracy                                   │
+│                                                                         │
+│   [Self-hosting]         ◄── running open-weight models on             │
+│                               infrastructure you control, using a      │
+│                               serving engine like vLLM (production      │
+│                               throughput) or Ollama (local              │
+│                               development), instead of calling a       │
+│                               managed API                              │
+│                                                                         │
+└───────────────────────────────────────────────────────────────────────┘
+```
 
-- **PEFT (Parameter-Efficient Fine-Tuning)** — train a small number of new parameters while
-  the base model stays frozen. **LoRA** is the dominant method: inject a pair of low-rank
-  matrices alongside existing weight matrices and train only those.
-- **Quantization** — store weights at lower numeric precision (16-bit → 8-bit → 4-bit) to cut
-  memory and increase speed, at some cost in accuracy.
-- **Self-hosting** — running open-weight models on infrastructure you control, using a serving
-  engine like **vLLM** (production throughput) or **Ollama** (local development), instead of
-  calling a managed API.
+**Plain English:** LoRA is how to train a model without retraining the whole thing.
+Quantization is how to squeeze a model onto hardware you can afford. Self-hosting is whether to
+run it on your own machines at all.
 
 ### 2. Scenario
 
@@ -1739,17 +2007,25 @@ rather than waiting for it to drain) and **paged KV cache** (memory managed in p
 does), which together lift throughput by an order of magnitude. That is what vLLM provides and
 what a hand-rolled server will not.
 
-```mermaid
-flowchart TD
-    A{Must the data stay on your infrastructure?} 
-    A -->|Yes, hard constraint| S[Self-host]
-    A -->|No| B{Is your token volume very high and stable?}
-    B -->|Yes| C[Model the economics:<br/>GPU hours + engineers<br/>vs per-token pricing]
-    B -->|No| M[Managed platform]
-    C -->|self-host wins| S
-    C -->|managed wins| M
-    S --> S1[You now own: GPUs, scaling, uptime,<br/>content filtering, abuse monitoring,<br/>model updates, security patching]
-    M --> M1[You get: newest models, elastic scale,<br/>safety systems, an SLA<br/>— and data leaves your estate]
+```
+   MUST THE DATA STAY ON YOUR INFRASTRUCTURE?
+   │
+   ├─ yes, hard constraint ────────────────────────────► [Self-host]
+   │
+   └─ no
+         └─ is your token volume very high and stable?
+               ├─ no  ──────────────────────────────────► [Managed platform]
+               └─ yes ─► model the economics: GPU hours + engineers
+                          vs per-token pricing
+                               ├─ self-host wins ──► [Self-host]
+                               └─ managed wins   ──► [Managed platform]
+
+   [Self-host]          ◄── you now own: GPUs, scaling, uptime, content
+                             filtering, abuse monitoring, model updates,
+                             security patching
+   [Managed platform]   ◄── you get: newest models, elastic scale,
+                             safety systems, an SLA — and data leaves
+                             your estate
 ```
 
 ### 5. Where it fits
@@ -1897,17 +2173,29 @@ client = OpenAI(base_url="http://gpu-node:8000/v1", api_key="not-used")
 
 ### 1. Definition
 
-**Plain English:** The model produces something fluent, confident and wrong. Not a crash, not
-an error message — a well-written falsehood delivered in exactly the same tone as the truth.
+**The picture is the definition:**
 
-**Precisely:** A hallucination is generated content not supported by the model's training data,
-the provided context, or reality. It is not a bug awaiting a fix — it is a *direct consequence
-of the training objective*. The model was optimised to produce likely-sounding continuations,
-not true ones. A plausible-sounding policy number is a good next-token prediction; whether it
-exists was never part of the objective.
-
-The critical property: **confidence is uncorrelated with correctness.** There is no tremor in
-the voice. That is what makes this the defining risk of the entire field.
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   [Correct answer]      "5 working days, per Section 4.2."             │
+│   [Hallucinated answer] "5 working days, per Section 4.2."             │
+│                                                                         │
+│   ◄── SAME fluency, SAME confidence, SAME tone. Nothing in the output  │
+│        marks one as invented. CONFIDENCE IS UNCORRELATED WITH          │
+│        CORRECTNESS — that's what makes this the defining risk of the   │
+│        entire field                                                    │
+│                                                                         │
+│   WHY IT HAPPENS: a hallucination is generated content not supported   │
+│   by the model's training data, the provided context, or reality. It  │
+│   is not a bug awaiting a fix — it is a direct consequence of the      │
+│   training objective. The model was optimised to produce LIKELY-      │
+│   SOUNDING continuations, not TRUE ones. A plausible-sounding policy   │
+│   number is a good next-token prediction; whether it exists was never │
+│   part of the objective                                                │
+│                                                                         │
+└───────────────────────────────────────────────────────────────────────┘
+```
 
 ### 2. Scenario
 
@@ -1979,31 +2267,33 @@ outcome rather than a failure.
 Self-consistency deserves attention: it is the cheapest *general* detector, because a model
 that knows a fact reproduces it, while a model inventing one invents differently each time.
 
-**Mitigations, mapped to the box they defend** — memorise this table, because it converts a
-vague topic into a checklist:
+**Mitigations map one-to-one onto the pipeline boxes — see Section 5 for the full checklist.**
+What detection actually gates, end to end:
 
-| Box | Mitigation |
-|---|---|
-| **Context assembly** | Ground with retrieval. Put sources in the prompt. Say *answer only from these sources*. Grant permission to abstain. Place key material at the start or end. |
-| **Tokenizer** | Don't overflow the window. Reserve output space. Use code, not the model, for arithmetic and character-level work. |
-| **Model** | A more capable model hallucinates less, never zero. Never treat model choice as *the* mitigation. |
-| **Decoding** | Low temperature for factual tasks. Cap output length — drift grows with length. |
-| **Output shaping** | A schema with a `sources` array and a **nullable** answer, so "unknown" is *representable*. A schema with no way to say "I don't know" guarantees invention. |
-| **Validation** | Verify citations exist and are quoted accurately. Run a groundedness check. Fail closed to a human path. |
-| **Telemetry** | Log every abstention and failed groundedness check. These are your highest-value evaluation cases — free, real, labelled failures. |
-
-```mermaid
-flowchart TD
-    A[Question] --> B{Sources retrieved?}
-    B -->|No| Z["Say so + log the retrieval miss"]
-    B -->|Yes| C[Generate, constrained to sources,<br/>citations required]
-    C --> D{Every claim cited?}
-    D -->|No| Z2[Strip uncited claims or regenerate]
-    D -->|Yes| E{Quoted text present in source?}
-    E -->|No| Z3[Reject: fabricated citation]
-    E -->|Yes| F{Groundedness check passes?}
-    F -->|No| Z4[Route to human review]
-    F -->|Yes| G[Answer + citations to user]
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   [Question]                                                           │
+│         │                                                              │
+│         ▼                                                              │
+│   sources retrieved?  ──no──► say so + log the retrieval miss          │
+│         │ yes                                                          │
+│         ▼                                                              │
+│   [Generate, constrained to sources, citations required]               │
+│         │                                                              │
+│         ▼                                                              │
+│   every claim cited?  ──no──► strip uncited claims, or regenerate      │
+│         │ yes                                                          │
+│         ▼                                                              │
+│   quoted text present in source?  ──no──► reject: fabricated citation  │
+│         │ yes                                                          │
+│         ▼                                                              │
+│   groundedness check passes?  ──no──► route to human review            │
+│         │ yes                                                          │
+│         ▼                                                              │
+│   [Answer + citations to user]                                         │
+│                                                                         │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
 **The honest position, and the one to state plainly:** hallucination cannot be eliminated. It
@@ -2017,19 +2307,32 @@ is not — no matter how good the model is.
 ```
    request
       │
-   context assembly      ◄── PRIMARY DEFENCE: grounding, sources, permission to abstain
+   context assembly      ◄── PRIMARY DEFENCE: ground with retrieval, put sources in
+      │                       the prompt, say "answer only from these sources," grant
+      │                       permission to abstain, place key material at the start
+      │                       or end
       │
-   tokenizer             ◄── don't truncate away the evidence
+   tokenizer             ◄── don't overflow the window and truncate away the
+      │                       evidence; reserve output space; use code, not the
+      │                       model, for arithmetic and character-level work
       │
-   model / deployment    ◄── capability helps; it does not solve
+   model / deployment    ◄── a more capable model hallucinates less, never zero —
+      │                       never treat model choice as THE mitigation
       │
-   decoding              ◄── low temperature, capped length
+   decoding              ◄── low temperature for factual tasks; cap output length —
+      │                       drift grows with length
       │
-   output shaping        ◄── a schema that can express "unknown", with a sources field
+   output shaping        ◄── a schema with a sources array and a NULLABLE answer, so
+      │                       "unknown" is representable — a schema with no way to
+      │                       say "I don't know" guarantees invention
       │
-▶  VALIDATION & RETRY  ◀ ─── SECOND DEFENCE: citation and groundedness checks
+▶  VALIDATION & RETRY  ◀── SECOND DEFENCE: verify citations exist and are quoted
+      │                     accurately, run a groundedness check, fail closed to a
+      │                     human path
       │
-   response + telemetry  ◄── log abstentions and failures as evaluation data
+   response + telemetry  ◄── log every abstention and failed groundedness check —
+                              these are your highest-value evaluation cases: free,
+                              real, labelled failures
 ```
 
 Hallucination is the one topic that touches every box — which is exactly why no single change
@@ -2145,19 +2448,48 @@ def answer_question(question: str, chunks: list[dict]) -> GroundedAnswer | None:
 
 ### 1. Definition
 
-**Plain English:** The difference between calling a model API and *operating a model service* —
+**The picture is the definition** — a managed platform hosts models inside YOUR cloud tenancy,
+under your identity, networking and compliance controls:
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   [Deployment]          ◄── a named instance of a specific model       │
+│                              VERSION, with its own capacity, filter    │
+│                              policy and rate limits — you call the     │
+│                              deployment name, not the model name       │
+│                                                                         │
+│   [Capacity model]       ◄── per-token PAY-AS-YOU-GO, or reserved      │
+│                               PROVISIONED THROUGHPUT (PTU) billed by   │
+│                               the hour regardless of use               │
+│                                                                         │
+│   [Quota]                  ◄── expressed in TPM (tokens per minute),   │
+│                                 allocated per subscription/region/     │
+│                                 model family, distributed across       │
+│                                 deployments                            │
+│                                                                         │
+│   [Content safety]          ◄── policies filtering hate, sexual,       │
+│                                  violence, self-harm and more, around  │
+│                                  the model, independent of it          │
+│                                                                         │
+│   [Private networking]       ◄── reachable over a private endpoint    │
+│                                   on your VNet, never the public       │
+│                                   internet                             │
+│                                                                         │
+│   [Region]                     ◄── chosen for DATA-RESIDENCY          │
+│                                     reasons — where data is allowed    │
+│                                     to be processed and stored         │
+│                                                                         │
+│   ◄── Azure OpenAI is the worked example here; AWS Bedrock and Google │
+│        Vertex AI have the same shape with different nouns — learn the │
+│        shape and the vendor becomes a detail                          │
+│                                                                         │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+**Plain English:** the difference between calling a model API and *operating a model service* —
 capacity you have reserved, limits you have been given, filters you have configured, networks
 you have locked down, and a documented answer to "where does our data actually go?"
-
-**Precisely:** A managed LLM platform hosts models inside your cloud tenancy under your
-identity, networking and compliance controls. You create **deployments** (named instances of a
-model version), consume them under a **capacity model** (per-token pay-as-you-go, or reserved
-**provisioned throughput**), within **quotas** expressed in **tokens per minute**, filtered by
-**content safety** policies, reachable over **private networking**, in a **region** chosen for
-**data-residency** reasons.
-
-Azure OpenAI is the worked example. AWS Bedrock and Google Vertex AI have the same shape with
-different nouns — learn the shape and the vendor becomes a detail.
 
 ### 2. Scenario
 
@@ -2295,8 +2627,8 @@ build, evaluate and operate on.*
       │
    tokenizer                ◄── TPM is consumed here, by input as well as output
       │
-▶  MODEL / DEPLOYMENT  ◀ ─── you are here: deployment name, capacity, quota,
-      │                       region, network path, identity
+▶  MODEL / DEPLOYMENT  ◀── you are here: deployment name, capacity, quota,
+      │                     region, network path, identity
    decoding
       │
    output shaping
@@ -2436,14 +2768,32 @@ print(r.choices[0].finish_reason)                          # stop / length / con
 
 ### 1. Definition
 
-**Plain English:** A class of model that works through a problem internally before answering.
-You pay for that thinking, you usually cannot see it, and it can be most of your bill.
+**The picture is the definition:**
 
-**Precisely:** Reasoning models are trained to generate an extended internal chain of thought
-before producing a final answer. The thinking tokens are generated, **billed as output tokens**,
-and typically not returned in full. Effort is controllable via a reasoning-effort or
-thinking-budget parameter, and quality on multi-step problems rises materially — at a large
-cost in latency and price.
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   [Question]                                                           │
+│         │                                                              │
+│         ▼                                                              │
+│   [Extended internal chain of thought]  ◄── generated, BILLED AS       │
+│         │                                    OUTPUT TOKENS, typically  │
+│         │                                    NOT returned in full —    │
+│         │                                    this is the part missing │
+│         │                                    from your token logs      │
+│         ▼                                                              │
+│   [Final answer]  ◄── usually the only part shown to you               │
+│                                                                         │
+│   ◄── REASONING EFFORT is a knob controlling how long the hidden       │
+│        chain of thought runs — your primary cost and latency control. │
+│        Quality on multi-step problems rises materially, at a large    │
+│        cost in latency and price                                       │
+│                                                                         │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+**Plain English:** a class of model that works through a problem internally before answering.
+You pay for that thinking, you usually cannot see it, and it can be most of your bill.
 
 ### 2. Scenario
 
@@ -2489,7 +2839,7 @@ Practical consequences that differ from standard models:
 ```
    model / deployment   ◄── a different KIND of model in the same box
       │
-▶  DECODING  ◀ ─── thinking tokens are generated here, billed here, hidden here
+▶  DECODING  ◀── thinking tokens are generated here, billed here, hidden here
 ```
 
 ### 6. Libraries & code
@@ -2548,19 +2898,34 @@ print(r.usage.completion_tokens_details.reasoning_tokens)
 
 ### 1. Definition
 
-**Plain English:** Instead of waiting for the whole answer and sending it at once, send each
-piece as it is generated. The total time does not change. The *felt* time changes completely.
+**The picture is the definition:**
 
-**Precisely:** Streaming returns tokens incrementally over a persistent connection (server-sent
-events for HTTP APIs). The user sees output beginning after **TTFT** rather than after full
-generation, converting a long wait into a short wait followed by visible progress.
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   [Non-streaming]  [──────────── silence, full duration ───────────]  │
+│                                                             full answer│
+│                                                                         │
+│   [Streaming]      [TTFT] "piece" "piece" "piece" "piece" ... done     │
+│                       ▲                                                │
+│                       └── the user sees output begin HERE, not after   │
+│                            full generation                             │
+│                                                                         │
+│   ◄── STREAMING: tokens returned incrementally over a persistent       │
+│        connection (server-sent events for HTTP APIs). TOTAL time is    │
+│        identical in both rows above — only the FELT time changes       │
+│                                                                         │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+**Plain English:** instead of waiting for the whole answer and sending it at once, send each
+piece as it is generated. The total time does not change. The *felt* time changes completely.
 
 ### 2. Scenario
 
-An 800-token answer takes 6 seconds to generate. Without streaming the user watches a spinner
-for 6 seconds and half of them reload the page. With streaming, text appears after 400
-milliseconds and flows steadily. Identical total time; the second version is judged fast and
-the first broken.
+The answer takes several seconds to generate in full before anything is sent. Users watch a
+blank screen or a spinner — and a meaningful share reload the page before it arrives, even
+though the model was working the whole time.
 
 ### 3. Example
 
@@ -2592,7 +2957,7 @@ validating in parallel and retracting on failure.
 ```
    decoding
       │
-▶  RESPONSE TRANSPORT  ◀ ─── you are here, between the model and the user
+▶  RESPONSE TRANSPORT  ◀── you are here, between the model and the user
       │
    validation & retry     ◄── ⚠ conflict: this wants the WHOLE output first
 ```
@@ -2657,12 +3022,27 @@ full = "".join(buffer)
 
 ### 1. Definition
 
-**Plain English:** The same model, but you can hand it an image, a scanned page or audio
-alongside the text.
+**The picture is the definition:**
 
-**Precisely:** Multimodal models accept non-text inputs encoded into the same token space as
-text. Images are converted into visual tokens by an encoder and attended over exactly like
-words — which is why images consume context window and cost tokens.
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   [Image]  ──► [Encoder]  ──► [Visual tokens]  ──┐                     │
+│                                                    │                    │
+│   [Text]   ─────────────────► [Text tokens]  ─────┼──► ONE sequence,   │
+│                                                    │     ONE attention  │
+│                                                    │     mechanism      │
+│                                                                         │
+│   ◄── images are converted into visual tokens by an encoder and        │
+│        attended over EXACTLY LIKE WORDS — that's what lets "what does │
+│        clause 4 say?" work against a picture, and why images consume   │
+│        context window and cost tokens, just like text                 │
+│                                                                         │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+**Plain English:** the same model, but you can hand it an image, a scanned page or audio
+alongside the text.
 
 ### 2. Scenario
 
@@ -2694,9 +3074,8 @@ are not cheap attachments; they are large token payloads.
 
 ### 4. How it works
 
-An encoder converts the image into embedding vectors placed into the same sequence as the text
-tokens. Attention operates across both, which is what allows *"what does clause 4 say?"* to work
-against a picture. Cost is driven by resolution and the detail setting.
+Cost is driven by resolution and the detail setting — the mechanism itself is Section 1's
+diagram.
 
 Strengths: layout understanding, charts and diagrams, handwriting in context, open-ended
 questions about a page. Weaknesses relative to dedicated OCR: dense small print, long
@@ -2761,7 +3140,27 @@ picked up properly in 8.3.1.3 and 8.3.1.4.
 
 ## C1. One request, end to end
 
-Everything in this file, in the order it executes, on a single real request.
+Everything in this file, in the order it executes, on a single real request. The trace below is
+deliberately self-contained: each step carries its own mechanism, its own numbers, and its own
+failure mode inline, not just a bracket pointing elsewhere. Read this section on its own and you
+should be able to reconstruct the whole file from memory — that is the point of Part C.
+
+**Before the trace starts, two decisions are already locked in** — they are architecture choices
+made once, not steps this request re-runs:
+
+- **Facts come from prompting + retrieval, never from training the model on our documents**
+  [8.1.5]. This system's knowledge problem (it doesn't know our policies) is a *facts* problem,
+  and fine-tuning teaches *form*, not *facts* — it produces a model that sounds more confident
+  while still blending in stale training data, with no citation and no way to update it when a
+  policy changes. RAG (built in Stage 3) puts the fact directly in the context window, where
+  attention can read it verbatim — which is also what makes citation, and therefore Step 8's
+  verification, possible at all.
+- **This model is called through a managed platform, not self-hosted** [8.1.6]. No hard
+  data-residency constraint forces self-hosting yet, so the "model/deployment" box below is a
+  vendor's endpoint, not our own GPUs running vLLM. The day a regulator says this data may not
+  leave the country, this entire step 4 changes shape: LoRA-adapted, quantized open weights on
+  procured hardware, and every safety system the platform was silently providing — content
+  filtering, abuse monitoring, rate limiting, uptime — becomes this team's job.
 
 ```
 USER: "How many days of annual leave do I have left this year?"
@@ -2806,9 +3205,771 @@ USER: "How many days of annual leave do I have left this year?"
     finish_reason, abstained?, tagged by feature                      [8.1.3/8.1.8]
 ```
 
-Nine steps. Every one of them is a topic in this file, and every one of them is a place the
-request can fail. That mapping — step → topic → failure mode — is the thing worth being able to
-produce from memory.
+### Every step, unpacked — the crux of each topic, as points, in execution order
+
+**1. Context assembly** — `[8.1.1] [8.1.4] [8.1.7] [8.1.11]`
+- Master diagram's first box. Lands here, before anything is tokenized: system prompt, chat
+  history, retrieved documents, tool schemas.
+- This request: system prompt (280 tok) + empty history + question (14 tok). Nothing retrieved
+  yet — that's Stage 3.
+- If a tool is offered → its JSON Schema is injected here too. Schemas are prompt text, billed
+  like anything else.
+- If the source is a photo/scanned form instead of typed text → it enters here as *visual
+  tokens* via an encoder, attended exactly like words, same shared budget — often costs *more*
+  tokens per page than the text equivalent.
+- ⚠ **Owns:** what's placed here is what attention can read verbatim. What's absent, the model
+  can only guess from training memory — this is where Step 8's hallucination risk gets seeded,
+  several steps before anyone checks for it.
+- ⚠ **Owns:** position matters — a fact buried mid-context is recalled less reliably than one at
+  the start or end ("lost in the middle").
+
+**2. Tokenize & budget** — `[8.1.1]`
+- Tokenizer (BPE) splits text into tokens, ≈ ¾ of an English word each.
+- Arabic / CJK: 2–3× worse — same meaning, more tokens, more cost, less room left in the window.
+- 294 input tokens counted against a 128,000-token window.
+- 800 tokens explicitly *reserved* for the answer, before the call — prevents "it fit, but the
+  answer got cut off mid-sentence" later in Step 5.
+- Every token billed on every call, both directions.
+- This count = the first entry in the cost record Step 9 persists.
+- ⚠ **Owns:** counting with the wrong encoding (mismatched to the model actually called) → budget
+  silently wrong → passes in testing, truncates or 400s in production.
+
+**3. Choose the model** — `[8.1.3] [8.1.9]`
+- Task = simple factual lookup → route to small/mid tier, not frontier.
+- Routing each task to the cheapest model that passes evaluation = the single largest cost lever
+  in the system — ~15× price gap between small and frontier tiers.
+- Explicitly *not* a reasoning model:
+  - Reasoning models spend hidden chain-of-thought tokens — billed, rarely shown back to you.
+  - Often 1,000–20,000+ tokens on a hard prompt → bill can land ~20× above what visible tokens
+    suggest.
+  - Latency: ~2s → 10–30s+.
+  - Worth it only for genuinely hard multi-step problems (overlapping eligibility, planning) —
+    wrong default for a lookup like this one.
+- The two pre-locked architecture decisions (above) already narrowed the field before routing
+  even runs: RAG + prompting (never a fine-tune), managed deployment (not self-hosted).
+
+**4. Call the deployment** — `[8.1.8]`
+- Deployment = named instance of one pinned model **version**. Code calls the deployment name
+  (`gpt4o-mini-prod-uaenorth`), never the raw model name.
+- → version behind it can change by config, not by a code change.
+- Managed identity (Entra ID token, not an API key) → nothing to leak or rotate.
+- Private endpoint → traffic never touches the public internet.
+- 30s timeout set explicitly — unset timeout = an outage waiting for a slow dependency.
+- Capacity model:
+  - Pay-as-you-go: billed per token, zero idle cost.
+  - PTU (Provisioned Throughput): billed hourly, 24/7, regardless of use.
+  - PTU only pays off once *actual* utilisation (not peak) clears break-even — a 9-to-5 tool is
+    "live" for only ~25% of the hours PTU would bill.
+- On HTTP 429 (TPM/RPM quota exceeded), in order:
+  1. Exponential backoff *with jitter* — without jitter, the whole fleet retries in lockstep and
+     re-creates the spike it's recovering from.
+  2. Honour `Retry-After`.
+  3. Spill to a second region.
+- Content-filter block → arrives as a 400 → policy outcome needing a human review queue, not a
+  bug to retry (false positives on legitimate professional/incident-report text are routine).
+- ⚠ **Owns:** the resource's *region* does not control where inference runs — *deployment type*
+  (global vs. regional/data-zone) is the real residency control. Conflating the two is the
+  mistake that surfaces in an audit, not in testing.
+
+**5. Decode** — `[8.1.2]`
+- Decoding = separate step, run once per generated token: logits → softmax → one chosen token.
+- `temperature 0` → always the highest-probability token (greedy) — correct here because this
+  question has exactly one right answer.
+- Rule of thumb: does the task have a right answer? Yes → temp 0. No → raise it.
+- top-p is never tuned at the same time as temperature — they reshape the distribution
+  differently, and combined effects compound unpredictably.
+- `max_tokens 800` → hard, ungraceful cutoff on output only:
+  - If hit → `finish_reason: "length"` → if the output was JSON, it's now broken JSON.
+  - Set generously relative to the expected answer size to avoid this.
+- Stop sequence halts cleanly at a blank line; the stop text itself is never included in output.
+- ⚠ **Owns:** even temp 0 + seed ≠ guaranteed identical output:
+  - Floating-point addition isn't associative.
+  - GPU batch composition shifts with concurrent load.
+  - Mixture-of-experts models can route differently.
+  - Providers move models under a stable-looking alias.
+  - `seed` is best-effort only — check `system_fingerprint` for a silent backend change.
+
+**6. Shape the output** — `[8.1.4] [8.1.7]`
+- Three tiers, ascending guarantee:
+  1. Ask nicely in the prompt — no guarantee.
+  2. Function / tool calling — reliable shape, model-chosen values.
+  3. Constrained decoding / strict mode — structural guarantee: illegal tokens are masked out
+     of the vocabulary *before* sampling, so the model is literally incapable of emitting
+     `"AED"` where a number is required.
+- `strict mode` here = tier 3, the strongest.
+- `answer` field made **nullable**, deliberately:
+  - The single most load-bearing anti-hallucination decision in the whole file.
+  - A schema with no way to say "I don't know" structurally forces invention the moment the
+    model is uncertain.
+- ⚠ **Owns:** schema-valid ≠ correct — a perfectly-typed object can still hold the wrong number,
+  and nothing downstream complains. More dangerous than malformed JSON, not less.
+- ⚠ **Owns:** a tool call is a *request*, never an authorisation — calling code decides whether
+  to execute it, checks the caller's real permissions, runs it under the user's identity. That
+  boundary is what Stage 4's approvals are built on.
+
+**7. Stream (or not)** — `[8.1.10]`
+- Answer is short, feeds a structured UI card, not prose read live → decision: do **not** stream.
+- Streaming only changes *felt* latency (time-to-first-token) — total generation time is
+  unchanged, sometimes marginally worse.
+- Streaming puts raw, unvalidated tokens in front of the user *before* Step 8's schema and
+  groundedness checks have run on the complete output.
+- → direct structural tension: a machine-consumed, schema-shaped answer gets all of streaming's
+  complexity and none of its benefit — so don't.
+- (Where streaming *would* matter: long prose a human reads live, where a blank screen — not
+  extra actual work — is what drives page reloads.)
+
+**8. Validate** — `[8.1.2] [8.1.4] [8.1.7]`
+- Check 1: did the schema parse?
+- Check 2: `finish_reason == "stop"`, not `"length"` — truncation is a distinct, expected
+  failure class, not an edge case to shrug off.
+- Check 3 (hallucination defence): sources present, quotes verifiable against the corpus?
+  - Citation verification = cheap string-matching; catches a fabricated citation that otherwise
+    reads *exactly* like a real one.
+  - Confidence and correctness are uncorrelated in the output — that's the core risk.
+  - Stage 1 has no retrieval corpus yet → equivalent guard: never demand an answer with no way
+    to abstain. "I don't know" must be a designed, permitted, successful outcome.
+- On failure → one bounded repair retry:
+  - Feed the model the *exact* error text ("field `currency` is required"), never a vague
+    "invalid output."
+  - Capped at 2–3 attempts — beyond that the model won't succeed, you're just spending.
+- After that → fail closed to a human queue. Never pass a half-parsed guess into a system that
+  pays out entitlements.
+
+**9. Respond + record** — `[8.1.3] [8.1.7] [8.1.8]`
+- Capture: `usage.prompt_tokens`, `usage.completion_tokens`, latency, actual deployment used,
+  `finish_reason`, whether the model abstained — all tagged by feature.
+- This one record is what makes possible, after the fact:
+  - Step 3's routing table.
+  - Step 4's TPM / PTU accounting.
+  - Step 8's hallucination detection — abstentions and failed groundedness checks are free,
+    real, *labelled* evaluation data.
+- Skip this step → cost, quality and safety all collapse into "we don't actually know" — exactly
+  the answer production review will not accept.
+
+### Full cram reference — every topic in this file, fact by fact
+
+The walkthrough above hits each topic's *role in one request*. This section is different: it is
+every definition, mechanism, number, table and failure mode from Part B (8.1.1–8.1.11), in full,
+in bullet form, so this one section is enough to revise from — no need to re-read Part B the
+night before an interview.
+
+#### 8.1.1 — Transformers, attention, tokenization, context window, embeddings vs generation
+
+- **Plain English:** an LLM predicts the next token, over and over (autoregressive), until it
+  stops. An embedding is the same machinery, stopped one step early, returned as a vector
+  instead of turned into more text.
+- **The pipeline, in order:** Text → Tokenizer (BPE) → Tokens (drawn from a 100k–200k
+  vocabulary) → Token vectors (embedding lookup) → Transformer blocks (attention + feed-forward,
+  ×30–100) → Logits → Softmax + sample → Next token → fed back into Text.
+- **BPE tokenizer:** built by scanning a huge corpus and repeatedly merging the most frequent
+  adjacent character-pairs into one unit. Common words ("the") → 1 token. Rarer words
+  ("entitlement") → 2+ tokens. Never-seen strings / typos → many tokens, near single characters.
+  - ⚠ This is why models are bad at counting letters (they never see letters, only tokens), and
+    why a typo can multiply token cost — it drops out of the "fully merged" bucket.
+- **Attention, mechanically:** each token produces a Query ("what am I looking for"); every
+  token produces a Key/Value ("what I offer / contribute"). Query·Key dot product → scale →
+  softmax across all tokens → weighted sum of Values = the token's new representation.
+- **Multi-head attention:** run several independent Q/K/V sets in parallel — different heads
+  specialise (grammatical subjects, quoted spans, long-range references) — then concatenate +
+  project into one combined representation.
+- **One transformer block, in order:** token vectors in → multi-head self-attention → add &
+  normalise → feed-forward network → add & normalise → token vectors out. Stack 30–100 of these.
+- **Causal masking:** a token may only attend to tokens *before* it, never the future — this is
+  what makes generation left-to-right.
+- **Quadratic cost:** sequence length N → N×N attention pairs. Double the length → 4× the
+  compute. This is the real reason long contexts are slow and expensive.
+- **Prefill vs decode:** Prefill = the whole input processed in one parallel pass → determines
+  TTFT (time to first token — long prompt = slow start). Decode = one token at a time, each a
+  full forward pass → determines tokens/sec (long answer = slow finish).
+- **KV cache:** stores the key/value vectors of tokens already processed so decode never
+  recomputes them. Often what exhausts GPU memory in long-context self-hosting — not the weights.
+- **Context window:** the whole budget = system prompt + chat history + retrieved docs + tool
+  schemas + reserved output space, all drawn from ONE pool. Bigger window ≠ cheaper — every
+  input token is billed on every call regardless of window size.
+- **Lost in the middle:** recall is high at the start and end of a long context, low in the
+  middle. Fitting is not the same as using.
+- **Embeddings vs generation — the core distinction:**
+  - Generation model: input=tokens, output=more tokens one at a time, used to write/answer/
+    reason/call tools, high cost (billed both directions), latency hundreds of ms to seconds.
+  - Embedding model: input=tokens, output=one fixed-length vector, used to search/compare/
+    cluster/deduplicate, very low cost (input tokens only), latency tens of ms, typical
+    dimension 1536 or 3072.
+- **The RAG funnel (why this distinction matters):** 8,000 documents → cheap embedding model →
+  top-5 relevant paragraphs → expensive generation model → grounded answer.
+- **Cosine similarity shortcut:** vectors from these embedding models are normalised to length
+  1, so the dot product IS the cosine similarity. 1.0 = identical meaning, 0 = unrelated.
+- **Key numbers:** 1 token ≈ 4 characters ≈ 0.75 words. 100 words ≈ 130 tokens. 1 page of prose
+  (~500 words) ≈ 650 tokens. A 40-page document ≈ 26,000 tokens. Arabic/Hindi/Thai/CJK: 2–3×
+  worse than English (historically; improved in newer vocabularies, not eliminated). Vocabulary
+  size: 100k–200k tokens. Layers in a large model: 30–100+ blocks.
+- **Failure modes:** sending too much context (cost rises linearly, accuracy can *fall* from
+  dilution); counting tokens with the wrong encoding (budget silently wrong — passes testing,
+  fails production); forgetting to reserve output space (truncation, `finish_reason: length`);
+  asking the model to count characters or do exact arithmetic (it never sees characters — use
+  code); assuming embedding vectors are interchangeable across models or dimensions (they
+  aren't — changing embedding model means re-embedding the whole corpus, a migration); treating
+  a huge context window as a substitute for retrieval (cost and the lost-in-the-middle effect
+  always catch up).
+- **Libraries:** `tiktoken` / `js-tiktoken` / `Microsoft.ML.Tokenizers` (counting);
+  `transformers.AutoTokenizer` (open-model tokenizers); `openai` / `anthropic` (generation and
+  embeddings).
+
+#### 8.1.2 — Temperature, top-p, max tokens, stop sequences, seeds & determinism
+
+- **The pipeline, once per generated token:** model forward pass → logits → ÷ temperature →
+  softmax → top-p/top-k cut → sample one token → stop-sequence or max_tokens check → loop again
+  or finish.
+- **Temperature:** divides every logit before softmax. High → flatter distribution (more
+  adventurous). Low → sharper (more deterministic). `T=0` skips sampling entirely and takes the
+  max directly — "greedy decoding."
+- **top-p (nucleus sampling):** keeps the smallest set of tokens whose cumulative probability ≥
+  p, discards the rest. Adapts: confident model → narrow nucleus; uncertain → wide.
+- **top-k:** just keeps the k best tokens, a flat cutoff regardless of confidence.
+- **Rule:** temperature *reshapes* the distribution; top-p *truncates* it. Never tune both at
+  once — the effects compound unpredictably.
+- **max_tokens:** caps OUTPUT only, never input. A hard, ungraceful cutoff — the model doesn't
+  know it's coming, so it can truncate mid-sentence or mid-JSON.
+- **Stop sequences:** halt generation immediately on match; the matched text itself is NEVER
+  included in the output.
+- **`finish_reason` values:** `"stop"` (finished naturally) / `"length"` (hit max_tokens — ALWAYS
+  check this) / `"tool_calls"` / `"content_filter"`.
+- **Seed:** best-effort repeatability only, never a guarantee. Check `system_fingerprint` — if
+  it changed between calls, the backend changed and the seed's reproducibility is void.
+- **Why determinism is hard even at temperature 0 — four reasons:**
+  1. Floating-point addition isn't associative — GPUs sum in whatever order the kernel
+     schedules, which depends on batch shape (i.e. who else is hitting the server).
+  2. Tiny differences can flip which of two near-tied tokens wins; once one token differs, the
+     rest of the generation diverges.
+  3. Mixture-of-Experts models route tokens to different sub-networks, and routing can shift
+     with batch composition.
+  4. Providers silently update model versions behind a stable-looking alias.
+- **Worked example ("The capital of France is", P(Paris)=0.90 at T=1.0):** T=0 → always Paris.
+  T=0.7 → Paris almost always (slight flattening). T=1.5 → Paris often, oddities appear (heavy
+  flattening). top_p=0.9 → only Paris survives. top_p=0.95 → Paris + "located" survive.
+- **Full knobs table:**
+  - `temperature` 0–2, default 1.0 → use **0** for extraction/classification/routing/tool
+    calls/SQL; **0.2–0.4** for factual Q&A/summarisation; **0.7–1.0** for drafting/brainstorming/
+    alternatives; **>1.2** almost never (quality degrades fast).
+  - `top_p` 0–1, default 1.0 → 0.9–0.95 as a gentler alternative to temperature.
+  - `top_k` 1–∞, off/model-specific default → 20–50 typical for open-weight models.
+  - `max_tokens` 1 → context limit, always set it explicitly.
+  - `stop` up to ~4 strings, none by default.
+  - `seed` any integer, best-effort only.
+  - `n` 1+, default 1 → 3–5 for multiple samples; input billed ONCE, output billed per sample
+    (cheaper than N separate calls).
+  - `frequency_penalty` -2 to 2, default 0 → 0.1–0.5 reduces verbatim repetition.
+  - `presence_penalty` -2 to 2, default 0 → 0.1–0.5 pushes toward new topics.
+- **`logprobs`:** returns log-probabilities for the top-N candidate tokens at a position — a
+  cheap confidence signal. A flat distribution here means the model is genuinely unsure, worth
+  logging or escalating on.
+- **Failure modes:** creative settings on a deterministic task (passes testing, "mostly correct"
+  in production — the worst kind of bug); temperature 0 on a creative task (`n=3` returns three
+  identical copies); tuning temperature and top-p together (loses the ability to reason about
+  either); unset or too-low `max_tokens` (truncated JSON — the most expensive failure class,
+  because you've already paid for the call); trusting `seed` as a guarantee (it's best-effort;
+  an audit process built on byte-identical replay will fail eventually); ignoring
+  `finish_reason` (the cheapest reliability signal available, routinely discarded); assuming low
+  temperature prevents hallucination (it doesn't — it makes the model *consistently* state
+  whatever it was going to state; grounding fixes hallucination, temperature only controls
+  variety).
+
+#### 8.1.3 — Model selection: capability vs cost vs latency
+
+- **Three axes, can't maximise all three:** Capability (multi-step reasoning, long-context
+  recall, instruction-following, code, non-English — gap between tiers small on easy tasks,
+  large on hard ones) / Cost ($ per million tokens, input and output priced separately, output
+  typically 3–5× the input price; reasoning models add a hidden third cost — billed "thinking"
+  tokens you never see) / Latency (TTFT — driven by input length/prefill — and tokens/sec —
+  driven by output length/decode — are two *different* numbers).
+- **Routing, not picking one model:** match each task's difficulty to the cheapest model that
+  passes evaluation for it. Usually the single largest cost lever in the whole system — bigger
+  than caching, bigger than prompt tuning.
+- **Worked cost calculation (know the shape, not the exact $):** 500 staff × 20 questions/day ×
+  22 working days = 220,000 requests/month. 3,000 input tokens + 400 output tokens per request →
+  660M input tokens/month, 88M output tokens/month.
+  - Frontier ($2.50 in / $10.00 out per 1M): ≈ $2,530/month.
+  - Mid-tier ($0.50 / $1.50): ≈ $462/month.
+  - Small ($0.15 / $0.60): ≈ $152/month.
+  - → roughly a **15× gap** between the small and frontier tiers.
+- **Two structural savings layered on top of model choice:**
+  - Prompt caching: the system prompt is identical every call — caching that stable prefix
+    typically cuts its cost 50–90% (on the frontier row, ~$1,650 input → ~$900).
+  - Routing: send the easy steps to the small model, only the hard step to frontier → a
+    realistic blended result is 40–70% below the all-frontier figure.
+- **How you consume the model — three options, each its own trade-off:**
+  - Hosted API (OpenAI, Anthropic direct): fastest to start, newest models first, least control
+    over data location.
+  - Managed cloud platform (Azure OpenAI, Bedrock, Vertex): enterprise identity + networking,
+    regional/residency control, slight lag on new models.
+  - Self-hosted open weights (vLLM, Ollama, your own GPUs): full control, no data egress,
+    cheapest at very high volume — but you own GPUs, scaling, and safety.
+- **The selection procedure — six steps, know this cold:**
+  1. Write down the task's hard constraints first: data residency, max latency, budget ceiling,
+     required context length, language coverage.
+  2. Eliminate every model that fails a hard constraint (usually most of them).
+  3. Build a small evaluation set from YOUR OWN data — 50–200 real examples with known-good
+     answers. Public benchmarks tell you about public benchmarks, not your task.
+  4. Run the cheapest surviving model first. Measure quality, p95 latency, cost per request.
+  5. Move up a tier only when measured quality is insufficient — record what changed.
+  6. Re-run when models change — they change often, and the cheap tier keeps absorbing tasks
+     that used to require the expensive one.
+- **Tier table (order of magnitude, verify current):**
+  - Small/fast: $0.10–0.30 in / $0.40–1.00 out per 1M, TTFT 100–400ms, 100–300 tok/s, good for
+    classify/route/extract/rewrite. Cost multiplier vs small: 1×.
+  - Mid-tier: $0.30–1.00 / $1–3, TTFT 300–800ms, 60–150 tok/s, summarise/standard Q&A. ~3×.
+  - Frontier: $2–5 / $8–20, TTFT 0.5–2s, 30–90 tok/s, reasoning/code/nuance. ~15×.
+  - Reasoning: $2–15 / $8–75, TTFT 2–30s+, varies, maths/planning/hard analysis. ~20–100×.
+- **Failure modes:** choosing on public benchmarks (proxies — a 50-example set from your own
+  data beats every leaderboard for your decision); one model for everything (simplest, most
+  expensive architecture); optimising cost before quality (get it right first, then cheap — the
+  reverse produces a system nobody trusts); ignoring latency in interactive contexts (a better
+  answer at 4s loses to a good answer streaming at 300ms); forgetting reasoning tokens (a
+  reasoning model can cost several times its headline rate on hard prompts); no fallback path
+  (single-provider, single-region, no timeout = an outage scheduled in its future); never
+  re-evaluating the routing table (the cheap tier improves every few months — a table set once
+  silently leaves money on the table).
+
+#### 8.1.4 — Structured outputs: JSON schema, function calling, constrained decoding, retries
+
+- **Three tiers, ascending guarantee:**
+  1. Ask in the prompt ("Reply with JSON") — NO guarantee. Model can add prose, code fences,
+     wrong types.
+  2. Function/tool calling — you supply a JSON Schema for a tool; model emits *arguments*
+     matching it instead of prose. Reliable shape, though the model still chose the values.
+  3. Constrained decoding / strict mode — the decoder is *prevented* from emitting any token
+     that would break the schema. A structural guarantee, not a probabilistic one (e.g. after
+     `{"total":` only digits/`-`/`.` are legal next tokens — `"AED"` is structurally impossible
+     there).
+- **The caveat that matters more than any tier:** all three guarantee *shape*; none guarantee
+  *truth*. `{"total": 4750.00}` is perfectly valid even when the real total was 5,470.00. Schema
+  validation and semantic validation are different problems.
+- **Function calling mechanics:** tool schemas are injected into context at assembly time; the
+  model emits a `tool_calls` field instead of text; nothing executes automatically — *your code*
+  decides whether to run it. This is the security boundary of the entire feature.
+- **Practical constraints of strict schema mode (verify per provider):** only a subset of JSON
+  Schema is supported; every property usually must be listed as "required" (express optionality
+  via a nullable union, never by omitting the field); `additionalProperties: false` is typically
+  mandatory; deeply nested or recursive schemas may be rejected; the first call with a new
+  schema carries extra latency while the grammar compiles (cached after).
+- **The validate-and-repair loop, in order:** call model with schema → parse JSON (fail →
+  retry) → validate against the model class (fail → retry) → business rule checks — totals add
+  up, date plausible, currency accepted (fail → retry) → return typed object. On any failure:
+  append the model's *exact* error text to the conversation and retry.
+- **Two rules for the repair loop:** feed the *actual* error text back (`"field 'currency' is
+  required"` gives the model something to act on — `"invalid output"` doesn't); bound the
+  retries at 2–3 (an unbounded repair loop is a cost incident waiting to happen).
+- **Knobs:** temperature 0 (right-answer task); max_tokens 2–4× expected output (truncation is
+  the #1 cause of unparseable JSON); retries 2–3 then fail closed; schema depth shallow (2–3
+  levels — deep nesting raises rejection rates); tools per request under ~10–20 (more degrades
+  selection accuracy and costs context on every call); field descriptions 1 short line each
+  (they are billed prompt tokens — write them for the model, not for humans); first-call latency
+  +100–500ms for strict mode (cached for subsequent calls with the same schema).
+- **Failure modes:** confusing valid with correct (a schema-perfect wrong number is *more*
+  dangerous than malformed output, because nothing downstream complains); truncation (max_tokens
+  too low → JSON cut mid-object → parse failure after you've already paid); over-nested schemas
+  (raises rejection/confusion — flatten, or split into multiple calls); too many tools
+  (selection accuracy degrades as the list grows — group tools or retrieve the relevant subset);
+  unbounded repair loops (a malformed edge case retried forever = a runaway bill); executing
+  tool calls automatically (hands your permission set to whoever wrote the input document);
+  optional fields in strict mode (must be expressed as nullable, not omitted, or the schema is
+  rejected).
+- **Libraries:** `pydantic` / `zod` (define the shape); `openai response_format` /
+  `zodResponseFormat` (native structured output); `instructor` / `instructor-js` (schema +
+  auto-retry wrapper); `outlines`, `guidance`, llama.cpp GBNF (grammar-constrained decoding).
+
+#### 8.1.5 — Fine-tuning vs RAG vs prompting vs distillation
+
+- **Four levers, most → least reversible:** Prompting (change instructions/examples in context —
+  no training, instant, reversible) → RAG (fetch relevant docs at query time, ground the answer
+  in current data) → Fine-tuning (continue training weights on your own input/output pairs —
+  behaviour becomes intrinsic) → Distillation (a large model generates training data, a small
+  model is fine-tuned on it — most of the quality, a fraction of the cost/latency).
+- **The one sentence that resolves most confusion:** RAG edits the input. Fine-tuning edits the
+  model.
+- **Diagnostic table — complaint → root cause → fix (a classic interview question):**
+  - "Wrong tone / too chatty" → behaviour/style → prompting first; fine-tune only if it must
+    hold across thousands of calls.
+  - "Doesn't know current facts / quotes an old policy" → missing knowledge → **RAG, and only
+    RAG.**
+  - "Ignores an instruction (e.g. always cite a section)" → behaviour under load → prompting
+    (restructure, add examples); fine-tune if it persists.
+  - "Too slow and too expensive" → cost/latency → distillation, or route to a smaller model.
+- **Why fine-tuning does NOT reliably install facts:** training nudges weights to make example
+  outputs more likely; a fact seen a handful of times in fine-tune data competes with patterns
+  seen millions of times in pre-training. Result: the model *sounds* like it knows, blends old
+  and new facts, can't cite a source, and can't be updated without retraining. RAG instead puts
+  the fact directly in the context window, where attention reads it verbatim — which is also
+  what makes citation (and Step 8's verification) possible at all.
+- **What fine-tuning IS genuinely excellent at:** output format/structure that must hold across
+  every call; tone, register, house style, a specific language variety; narrow classification
+  with lots of labelled examples; domain vocabulary and phrasing conventions; shortening prompts
+  (moving a 2,000-token instruction block into the weights cuts per-call cost and latency);
+  teaching a small model a task the big model already does well (= distillation).
+- **Decision tree:** lacks facts, or facts change → RAG. Behaves/formats wrong → prompting
+  exhausted? no → prompt more (restructure, few-shot examples); yes, and 500+ examples available
+  → fine-tune/LoRA. Too slow/expensive at acceptable quality → distillation. Too slow/expensive
+  and quality NOT acceptable, or cannot do the task at all → try a MORE CAPABLE model first,
+  before any training. These paths COMBINE — most mature systems run prompting + RAG, sometimes
+  plus a small fine-tune on top.
+- **Fine-tuning practicals:** training data = JSONL, one conversation per line, in the *exact*
+  message shape used at inference (mismatch between training and serving format is the single
+  most common reason a fine-tune underperforms). Rules of thumb: 500–1,000 examples for
+  tone/format, 5,000+ for harder behaviour; quality beats quantity (200 excellent examples beat
+  2,000 mediocre ones); hold back 10–20% as a validation set never trained on; your examples
+  *are* the specification — ambiguity in them becomes model behaviour; pin the exact base model
+  version (a fine-tune is bound to its base; an unpinned base moves under you).
+- **Distillation, three steps:** 1) Generate — run the expensive model over real production
+  inputs. 2) Filter — keep only outputs that pass evaluation or human review (skip this and you
+  faithfully reproduce the big model's mistakes, cheaply). 3) Train — fine-tune the small model
+  on the surviving pairs. Always measure the small model against the big one on a held-out set
+  *before* switching traffic.
+- **Comparison table:**
+  - Fixes missing facts: RAG = ✓ (only one). Prompting / fine-tuning / distillation = ✗.
+  - Fixes tone/format: fine-tuning = ✓✓. Prompting = partly. RAG = ✗. Distillation = inherits it.
+  - Cuts per-call cost: fine-tuning = ✓ (shorter prompts). Distillation = ✓✓. Prompting/RAG = ✗
+    (both *add* tokens).
+  - Cuts latency: distillation = ✓✓. Fine-tuning = slightly. Prompting/RAG = ✗.
+  - Update when data changes: prompting = edit a string. RAG = re-index. Fine-tuning/distillation
+    = retrain.
+  - Provides citations: RAG = ✓ (only one).
+  - Time to first result: prompting = minutes. RAG = days. Fine-tuning = days–weeks.
+    Distillation = weeks.
+  - Examples needed: prompting 0–5. RAG needs a corpus, not examples. Fine-tuning 500–10,000.
+    Distillation 5,000–50,000 generated.
+- **Failure modes:** "let's fine-tune it on our documents" (THE single most common wrong answer
+  in the field — produces a confidently wrong, un-citable, un-updatable model; correct answer is
+  RAG); fine-tuning before prompting is exhausted (weeks of work for what four examples and a
+  restructured prompt would fix in an afternoon); training/serving format mismatch (the
+  fine-tune quietly underperforms and nobody can say why); too many epochs or too few examples
+  (memorisation, brittleness, degraded general ability); distilling unfiltered outputs
+  (faithfully reproduces the big model's errors, cheaply); ignoring the payback threshold
+  (fine-tuning at low volume costs more than it saves); fine-tuning a moving base model (the base
+  is deprecated and the fine-tune goes with it — pin versions, plan the migration day one);
+  assuming RAG fixes behaviour problems too (it fixes knowledge only — nothing for tone, format,
+  or instruction-following).
+
+#### 8.1.6 — PEFT/LoRA, quantization, self-hosting vs managed
+
+- **Three related questions:** LoRA/PEFT (train a small number of new parameters while the base
+  stays frozen — inject low-rank matrix pairs alongside existing weights, train only those) /
+  Quantization (store weights at lower numeric precision — 16→8→4-bit — to cut memory and raise
+  speed, at some accuracy cost) / Self-hosting (run open-weight models on infrastructure you
+  control via vLLM [production] or Ollama [local dev], instead of calling a managed API).
+- **What forces this decision:** a hard regulatory constraint (data must never leave national
+  territory, even to a foreign-operated in-country cloud region) eliminates every managed-API
+  option outright — no amount of quality or convenience recovers it.
+- **LoRA, the maths:** you want to learn a weight update ΔW for a large frozen matrix W (d×k).
+  Insight: ΔW for a narrow adaptation is *low-rank*. Instead of a full d×k update, store two
+  thin matrices B (d×r) @ A (r×k), rank r=16. Output = W·x + (B·A)·x × (alpha/r). Only B·A
+  trains; W stays frozen throughout.
+  - rank (r): capacity control. 8–16 for style/format, 32–64 for harder adaptations. Higher rank
+    = more parameters, more overfitting risk.
+  - alpha: scales the adapter's influence; common convention is alpha = 2×r.
+  - target_modules: which matrices get adapters — attention projections (`q_proj`, `v_proj`,
+    etc.) are the usual choice.
+  - Adapters are swappable and mergeable: serve one base model with many small adapters, or
+    merge one into the base for a standalone model with zero inference overhead.
+  - QLoRA = a 4-bit quantized frozen base + LoRA adapters at higher precision — how large models
+    get fine-tuned on a single consumer GPU.
+- **LoRA numbers, a 7B model:** Full fine-tuning: 7B trainable parameters, ~80–120GB GPU memory,
+  multiple high-end GPUs, hours to days. LoRA (rank 16): ~20M trainable parameters (~0.3% of the
+  model), ~16–24GB GPU memory, a single GPU, often under an hour, adapter file ~40MB versus
+  ~14GB for the full model.
+- **Quantization table, 7B model weights only:**
+  - FP32 (4 bytes/param): ~28GB, needs 2×24GB GPUs, reference quality.
+  - FP16/BF16 (2 bytes): ~14GB, 1×24GB GPU, effectively identical quality.
+  - INT8 (1 byte): ~7GB, 1×12GB GPU, very close quality.
+  - 4-bit / NF4 / Q4_K_M (0.5 bytes): ~3.5GB, fits 1×8GB GPU or a laptop, slight but usually
+    acceptable quality loss.
+- **The memory estimate people get wrong:** weights are NOT the whole memory requirement — add
+  the KV cache (grows with context length × concurrency) plus activations and framework
+  overhead. Planning rule: weights × 1.2, plus KV cache sized for your concurrency and context
+  length. A 4-bit 7B model with a long context and 20 concurrent users needs far more than 3.5GB.
+- **Quantization mechanism:** weights stored at fewer bits, mapped through a per-block scale
+  factor. Modern 4-bit formats (NF4, GPTQ, AWQ, GGUF Q4_K_M) are calibrated so the loss is
+  usually small — but it concentrates in the hard cases: long-context recall, multi-step
+  reasoning, less-represented languages. Always evaluate a quantized model on YOUR task before
+  deploying it — average benchmarks won't reveal what happened to your specific workload.
+- **Serving mechanics:** a naive one-request-at-a-time loop wastes almost all GPU capacity.
+  Production servers use continuous batching (new requests join a running batch rather than
+  waiting for it to drain) + paged KV cache (memory managed in pages, OS-style) — together an
+  order-of-magnitude throughput gain. That's what vLLM provides that a hand-rolled server won't.
+- **Self-host decision tree:** must the data stay on your infrastructure (hard constraint)? →
+  yes → self-host. No → is token volume very high and stable? → no → managed platform. → yes →
+  model the economics (GPU-hours + engineers vs. per-token pricing) → whichever wins.
+- **What you own once you self-host:** GPUs, scaling, uptime, content filtering, abuse
+  monitoring, model updates, security patching. Self-hosting doesn't remove pipeline boxes — it
+  transfers ownership of them from the provider to your team, which is exactly the cost that
+  gets underestimated.
+- **Libraries:** `peft` + `transformers` + `trl` (the standard LoRA fine-tuning stack); Axolotl /
+  Unsloth (config-driven, faster to get right); `bitsandbytes` (quantized loading); GPTQ / AWQ /
+  GGUF (pre-quantized formats, faster to load); **vLLM** / TGI (production serving — continuous
+  batching, paged KV cache, OpenAI-compatible API); **Ollama** / llama.cpp (local development
+  only — NOT built for concurrent production serving).
+- **Failure modes:** underestimating operational burden (a model answering on a GPU is a day;
+  running it reliably for 500 users with safety controls and an upgrade path is a team); sizing
+  on weights alone (fits until real concurrency arrives and the KV cache exhausts VRAM); a
+  quantized model deployed without task-specific evaluation (average benchmarks look fine while
+  your long-context or Arabic use case degrades); Ollama in production (not built for concurrent
+  serving — use vLLM or TGI); LoRA rank too high (overfits the training set, degrades general
+  ability); losing the base-model pin (an adapter is bound to its exact base — record base,
+  revision, tokenizer and training format alongside the adapter); forgetting the safety layer (a
+  self-hosted model with no content filtering and no logging is a compliance finding waiting to
+  be written up); GPUs idling (reserved capacity at 5% utilisation is the most common way
+  self-hosting ends up *more* expensive than the API it replaced).
+
+#### 8.1.7 — Hallucination: causes, detection, mitigation
+
+- **The defining fact:** a hallucinated answer has the SAME fluency, SAME confidence, SAME tone
+  as a correct one — nothing in the output marks it as invented. Confidence is uncorrelated with
+  correctness. That's what makes this the defining risk of the whole field.
+- **Why it happens, mechanically:** the model was optimised to produce likely-*sounding*
+  continuations, not true ones. A plausible policy number is a good next-token prediction;
+  whether it exists was never part of the training objective. Not a bug awaiting a fix — a
+  direct consequence of the training objective. It cannot be eliminated, only bounded, detected
+  and contained.
+- **Causes, in four groups — each group needs a different fix:**
+  - **Group A — the model lacks the knowledge:** fact never in training data (too new/internal/
+    obscure); seen sparsely, so remembered weakly and blended with similar facts; knowledge
+    cutoff (anything after training simply doesn't exist to the model).
+  - **Group B — the system didn't supply the knowledge:** retrieval returned nothing or the
+    wrong documents; the right document was retrieved but buried mid-context (lost in the
+    middle); context was truncated and the relevant part dropped.
+  - **Group C — the prompt demanded an answer:** no permission to abstain ("answer the question"
+    leaves exactly one path); a false premise accepted ("what's the penalty under Section 9?"
+    when there is no Section 9 — the model tends to accept the premise and build on it);
+    sycophancy (user pushback flips a correct answer into an incorrect one).
+  - **Group D — decoding and mechanics:** high temperature widens the range of
+    plausible-but-wrong continuations; tokenizer artifacts (character counting, digit-level
+    arithmetic, exact string manipulation); over-long generation (the further it goes, the
+    further it drifts from its grounding).
+- **Detection techniques, ascending cost:**
+  1. Citation verification — every claim maps to a retrieved chunk, check the quoted text
+     actually appears. Very low cost, string matching.
+  2. Confidence signals — low token probabilities (`logprobs`) at a factual claim. Low cost, one
+     extra field.
+  3. Self-consistency — sample 3–5 times at temperature > 0; disagreement means uncertainty.
+     Medium cost (3–5× the calls). The cheapest *general* detector: a model that knows a fact
+     reproduces it; one inventing a fact invents differently each time.
+  4. LLM-as-judge groundedness — a second model checks the answer is entailed by the sources.
+     Medium cost, one extra call.
+  5. Human review — high cost, but mandatory for high-stakes decisions.
+- **Four-design comparison, same question:** No grounding → invented, unfalsifiable. Grounding,
+  no abstention instruction → invented *and* falsely attributed (worse). Grounding + abstention
+  permitted → correct behaviour ("the documents don't cover this — contact HR"). Grounding +
+  abstention + citation check → correct, and it improves itself (logs the retrieval miss).
+- **Mitigation pipeline, in order:** sources retrieved? no → say so + log the retrieval miss.
+  Generate, constrained to sources, citations required. Every claim cited? no → strip uncited
+  claims or regenerate. Quoted text present in the source? no → reject: fabricated citation.
+  Groundedness check passes? no → route to human review. Only then → answer + citations to
+  the user.
+- **The honest position (state this plainly):** hallucination cannot be eliminated — it is
+  intrinsic. You can *bound* it (grounding), *detect* it (verification), *contain* it (abstention
+  paths and human review for anything consequential). A design that assumes the model will
+  sometimes be confidently wrong is robust; one that assumes it won't, isn't — no matter how good
+  the model is.
+- **Mitigation mapped to every pipeline box:** context assembly = PRIMARY defence (ground with
+  retrieval, "answer only from these sources," grant permission to abstain, place key material at
+  the start or end); tokenizer (don't truncate away the evidence, reserve output space, use code
+  not the model for arithmetic/character work); model/deployment (a more capable model
+  hallucinates less, never zero — never treat model choice as *the* mitigation); decoding (low
+  temperature for factual tasks, cap output length — drift grows with length); output shaping (a
+  nullable answer field, so "unknown" is representable — a schema with no way to say "I don't
+  know" guarantees invention); validation & retry = SECOND defence (verify citations, run a
+  groundedness check, fail closed to a human path); telemetry (log every abstention and failed
+  groundedness check — free, real, labelled evaluation data).
+- **Failure modes:** assuming a better model solves it (reduces frequency, changes nothing
+  structural); prompting "do not hallucinate" (the model has no reliable access to whether it is
+  doing so — grounding and verification work, instruction alone doesn't); no abstention path (the
+  most common design error in the field — if the only permitted output is an answer, you get an
+  answer every time, including when there isn't one); trusting citations without checking
+  (fabricated ones read exactly like real ones); over-retrieving (fifty chunks dilute the
+  evidence and increase drift); confusing fluency with confidence (a hedging tone is stylistic,
+  not calibration); skipping verification to save money (the cost lands on the user, then on your
+  organisation's credibility).
+
+#### 8.1.8 — Azure OpenAI / Azure AI Foundry: running a model in production
+
+- **The six production-review questions (memorise verbatim — this chapter IS the answer to
+  them):** 1) Where is the data processed, physically? 2) Is our data used to train the model?
+  3) How is this authenticated — is the key in source control? 4) Does traffic cross the public
+  internet? 5) What happens when 400 people use it at 09:00? 6) Who reviews what it refuses, and
+  what it fails to refuse? None are model questions — all are platform questions.
+- **Deployment — the concept that trips people up:** you don't call `gpt-4o` directly. You
+  create a *deployment*: a named instance of one specific model **version**, with its own
+  capacity, content-filter policy and rate limits. Code passes the deployment name, never the
+  raw model name — this is what lets `gpt4o-prod` stay pinned to a known version while
+  `gpt4o-canary` points at a newer one, switching traffic by configuration, not by code.
+- **Capacity models:**
+  - Pay-as-you-go (Standard): billed per token, variable latency under shared load, subject to
+    shared limits, zero idle cost, fits spiky/low/unpredictable volume.
+  - PTU (Provisioned Throughput): billed per hour of reserved capacity, predictable latency (the
+    main reason to buy it), guaranteed throughput, full cost even when idle, fits steady/high/
+    latency-sensitive volume.
+- **The PTU break-even formula (be able to do this on a whiteboard):** PTU cost = reserved
+  units × hourly rate × 730 hours/month (fixed). PAYG cost = monthly tokens × per-token price
+  (variable). Below break-even volume, PAYG is cheaper; above it, PTU is cheaper AND faster.
+- **THE PTU TRAP:** PTU bills 24/7. A tool used only 09:00–17:00 on working days is live for
+  roughly 25% of the hours being paid for — so its real break-even volume is about **4× the
+  naive calculation**. Always compute against *actual* utilisation, never peak. Common hybrid
+  shape: PTU sized for a steady baseline, PAYG spillover for peaks.
+- **Quotas, TPM and 429s:** quota is allocated per subscription/region/model family in **TPM**
+  (tokens per minute), distributed across deployments; a requests-per-minute limit is typically
+  derived from TPM by a fixed ratio (verify current). Exceeding either → **HTTP 429** with a
+  `Retry-After` header. TPM counts BOTH input and output — a long system prompt eats rate-limit
+  headroom on every call, not just money.
+  - Handling 429, in order: exponential backoff *with jitter* (without jitter, the whole fleet
+    retries in lockstep and re-creates the exact spike it's recovering from) → honour
+    `Retry-After` → queue non-interactive work → spill to a second-region deployment.
+- **Content filters:** run *around* the model, independent of it. Categories: hate, sexual,
+  violence, self-harm (+ jailbreak/prompt-injection shields, protected-material detection,
+  custom blocklists). Severity levels: safe/low/medium/high, against a configurable threshold
+  (default typically medium). A blocked request returns an error or a `content_filter` finish
+  reason.
+  - ⚠ Two operational realities: false positives on legitimate medical/legal/security/
+    incident-report text are routine (need a review path); reduced filtering must be *applied
+    for*, never just switched on.
+- **Regions and residency — three things people conflate (the key government-context
+  question):**
+  1. Where the *resource* lives — the region you created it in.
+  2. Where *inference actually runs* — determined by deployment type. Global deployments may
+     process requests anywhere in the provider's fleet; regional/data-zone deployments constrain
+     it. **If residency is a requirement, deployment TYPE is the control — not the resource's
+     region.**
+  3. Where data is *stored at rest* — including any abuse-monitoring retention.
+  - The standard tension: your residency-compliant region may not offer the model you want —
+    that trade-off is a risk-owner decision, taken openly, never a silent engineer choice.
+- **Data-handling commitments (verify current terms, but know the shape):** prompts/completions
+  are not used to train foundation models; data stays within the service boundary; inputs/
+  outputs may be retained for a limited period (commonly cited ~30 days) for abuse monitoring,
+  reviewable by authorised personnel; customers with a qualifying use case can apply for
+  **modified abuse monitoring** — no human review, no retention — often the deciding factor for
+  government workloads.
+- **Private networking:** a private endpoint puts the service on your VNet with a private IP;
+  public network access is disabled; traffic never traverses the public internet. Pair with
+  Entra ID + managed identity so no API key exists anywhere — key rotation stops being a
+  problem.
+- **Azure AI Foundry vs Azure OpenAI:** Azure OpenAI = the model endpoint. AI Foundry = the
+  platform layer above it — projects/hubs, a multi-vendor model catalogue, an agent service,
+  evaluation tooling, tracing, content safety and prompt management, all in one place.
+- **Prototype vs production client, side by side:** prototype = API key in an env var, public
+  internet, unknown region, shared capacity. Production = Entra ID token via managed identity
+  (no key at all), private endpoint, pinned API version, a named deployment (never the raw model
+  name).
+- **Failure modes:** assuming the resource's region controls where inference happens (global
+  deployment types may process elsewhere — this is the residency mistake found in an audit, not
+  in testing); no 429 handling (works with one user, falls over at 09:00 on Monday); API keys in
+  configuration (rotation, leakage, no per-user attribution); buying PTU on peak numbers
+  (reserved capacity idle 75% of the time, at full price); unpinned model versions (behaviour
+  changes under you, and your evaluation results now describe a model you're no longer running);
+  treating a content-filter block as a bug (it's a policy outcome needing a user-facing message
+  and a review queue); ignoring deprecation notices (models retire on a published schedule);
+  not knowing your data-handling position ("I'd have to check" is the answer that stops a
+  government review).
+
+#### 8.1.9 — Reasoning models and hidden thinking tokens
+
+- **Mechanism:** question → extended internal chain of thought (generated, **billed as output
+  tokens**, typically NOT returned in full — this is the part missing from your visible token
+  logs) → final answer (usually the only part shown to you).
+- **`reasoning_effort` knob:** controls how long the hidden chain of thought runs — your primary
+  cost and latency control (low/medium/high, roughly linear in cost and latency).
+- **Worked example:** standard model: in 800, out 150 (all visible), ~1.5s. Reasoning model: in
+  800, out 3,400 (only 200 visible — 3,200 are hidden reasoning tokens, billed, never shown),
+  ~12s. At $10/1M output: $0.0015 vs $0.034 — roughly **22× the cost** for that one call.
+- **Real-world swap result:** accuracy 71% → 89% (a genuine win), but average response time 2s →
+  14s, and the monthly bill 6× higher than the visible token logs suggested — the logs weren't
+  wrong, they just couldn't see the reasoning tokens.
+- **Practical consequences that invert standard-model habits:**
+  - "Think step by step" is redundant and can actively hurt — it already does that internally.
+    Give the problem and constraints, not a method.
+  - Few-shot examples often help less, sometimes actively worse.
+  - Temperature is frequently ignored or restricted on these models.
+  - Streaming is less useful — a long silence during thinking, then a fast answer. The UI needs
+    a "working…" state, not a token stream.
+- **Numbers:** reasoning tokens per hard call: 1,000–20,000+ (often dominates total spend).
+  Latency: 2–60s+ (usually unsuitable for interactive chat). Accuracy gain: material on hard
+  tasks, near zero on easy ones — hence route to it, never default to it.
+- **Gotcha:** `max_completion_tokens` covers reasoning tokens AND the answer combined. Set it too
+  low and the model can spend the entire budget thinking and return nothing at all — billed in
+  full anyway.
+- **Governance angle:** hidden reasoning is not auditable. For a decision that must be
+  explainable to a citizen or a regulator, an unseen chain of thought is a governance problem,
+  not a feature.
+- **Failure modes:** defaulting to it (enormous cost, no gain on easy tasks); budgeting only
+  visible tokens (the classic bill shock); `max_completion_tokens` too low (empty or truncated
+  answer, paid in full); using it in interactive chat (users abandon at ~10s of silence);
+  relying on it for explainability (the chain is hidden or summarised — not an audit trail).
+
+#### 8.1.10 — Streaming
+
+- **The core fact:** total generation time is *identical* whether you stream or not — only the
+  *felt* time changes. Non-streaming = silence for the full duration, then the whole answer.
+  Streaming = TTFT (time to first token), then piece-by-piece output.
+- **Mechanism:** the connection is held open, the server emits small deltas (server-sent events
+  for HTTP APIs), the client accumulates them.
+- **Consequences to design for:** errors can arrive mid-stream, after text is already shown to
+  the user; you don't know the full response until the stream ends, so anything needing the
+  *complete* output (schema validation, groundedness checks, PII redaction) cannot run until
+  then; `usage` typically arrives only in the final chunk (or requires an explicit
+  `include_usage` option) — forget it and cost accounting has a silent gap.
+- **The structural tension to be able to state clearly:** streaming raw tokens means showing the
+  user content your outbound guardrails have not yet inspected. Three standard resolutions: (1)
+  stream only on low-risk surfaces, (2) buffer-and-scan in small windows before releasing, (3)
+  stream to the UI while validating in parallel and retract on failure.
+- **Numbers:** TTFT 200ms–2s (driven by input length/prefill); tokens/sec 30–300 depending on
+  tier; perceived-latency improvement = large; actual total time = unchanged, or marginally
+  worse.
+- **Decision rule:** stream anything a human reads in real time. Never stream to a machine
+  consumer — all the complexity, none of the benefit.
+- **Failure modes:** streaming unvalidated content (the guardrail runs after the user has already
+  read it); no mid-stream error handling (a half-answer freezes on screen with no explanation);
+  forgetting `include_usage` (a silent gap in cost accounting); streaming to a batch or API
+  consumer (complexity without benefit).
+
+#### 8.1.11 — Multimodal input
+
+- **Mechanism:** image → encoder → visual tokens; text → text tokens; both become ONE sequence
+  under ONE attention mechanism. Images are attended over exactly like words — that's what lets
+  "what does clause 4 say?" work against a picture, and why images consume context window and
+  cost tokens just like text.
+- **The `detail` parameter — the single biggest cost lever:** `detail: low` = fixed, small token
+  cost, coarse. `detail: high` = the image is tiled → token cost scales with resolution, often
+  **~10× the low setting**. A high-detail page image can consume the same context budget as
+  several pages of text.
+- **Strengths vs dedicated OCR:** a multimodal LLM wins at layout understanding, charts/
+  diagrams, handwriting in context, open-ended questions about a page. Dedicated OCR/document
+  intelligence wins at dense small print, long multi-page documents, precise bounding boxes and
+  confidence scores, and non-Latin scripts (notably **Arabic**), where explicit-support OCR
+  services still beat general multimodal LLMs.
+- **Standard production pattern:** dedicated OCR/document intelligence for accurate text and
+  layout extraction, THEN the LLM interprets the extracted text — reserve the direct multimodal
+  path for cases where visual layout genuinely carries meaning.
+- **Failure modes:** replacing OCR entirely (accuracy on dense or Arabic text disappoints, and
+  you lose confidence scores and bounding boxes); uploading full-resolution photographs
+  (enormous token cost for no accuracy gain — downscale first); forgetting images are a
+  prompt-injection vector (instructions printed *inside* an image are read by the model and can
+  be followed); assuming every deployment is multimodal (it's a model capability — check before
+  routing there).
+- **Security note:** uploaded images are untrusted input; text inside an image is read by the
+  model — scan, size-limit, and treat extracted text as untrusted, same as any other user input.
+
+### What this trace doesn't re-run, and why
+
+- `8.1.5` (fine-tuning vs. RAG vs. prompting vs. distillation) and `8.1.6` (PEFT/LoRA,
+  quantization, self-hosting vs. managed) aren't numbered steps because they aren't per-request
+  work.
+- They're standing decisions, taken once, revisited only on a changed constraint — they
+  determine *which* model gets called in Step 3 and *how* it gets reached in Step 4.
+- See **C2** for how all nine steps above reconfigure under four different constraints
+  (cheapest / fastest / most private / highest quality).
+- See **C3** for the three problems that survive this entire trace and force Stages 2–4.
+
+Nine steps, each with its own mechanism, number and failure mode above — not just a citation.
+That step → mechanism → number → failure mode chain is the thing worth reproducing from memory;
+the bracketed tag is only where to go for more depth, never a substitute for what's next to it
+here. And the **Full cram reference** above it means this one C1 section now carries every fact
+in the file — nothing in 8.1.1 through 8.1.11 is missing from it.
 
 ## C2. The same request, four ways
 

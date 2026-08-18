@@ -3,6 +3,10 @@
 *Read this file first. It is the index, the architecture, and the study order for everything
 in files 01–07.*
 
+*Writing or upgrading any of these files? Use `00-Authoring-Rules.md` alongside this map — it is
+the production spec for how each Part A/B/C gets written, including the Part C completeness bar
+established when Stage 1 was rewritten for real interview-cram use.*
+
 ---
 
 ## 1. How this material is organised
