@@ -1,0 +1,386 @@
+Both read. Quick framing before the list: this JD is one person owning three jobs — app engineering, a Microsoft data platform, and AI enablement — inside a UAE gov/semi-gov entity. Your CV is very strong on job 1, credible on job 3, and near-silent on job 2 (Power BI, Fabric, Power Platform appear nowhere in your bullets or skills). A technical panel at a government entity will absolutely probe there, plus a governance/compliance layer your CV doesn't touch at all.
+
+Here is the full syllabus. Tags: ✅ solid CV evidence · ⚠️ adjacent/thin, they'll push past it · ❌ not on your CV — highest risk, highest ROI.
+
+---
+PART 1 — APPLICATION ENGINEERING
+
+1.1 Python ✅⚠️
+
+- FastAPI: dependency injection, Pydantic v2 validation, async/await, background tasks, middleware, lifespan events
+- Django vs FastAPI vs Flask — when you'd pick each; JD lists Python first, they may assume Django for internal apps
+- Async internals: event loop, asyncio.gather, blocking-call pitfalls, sync vs async DB drivers
+- Packaging & envs: uv/poetry/pip-tools, virtualenvs, dependency pinning, lockfiles
+- Celery / background jobs, retries, idempotency
+- SQLAlchemy 2.0 ORM patterns, session lifecycle, N+1
+- Typing, mypy/ruff, pytest fixtures, parametrize, mocking, coverage
+- GIL, multiprocessing vs threading vs async — classic senior question
+- Python for data: Pandas ops, memory, vectorization (JD blends Python with the data platform)
+
+1.2 .NET ✅
+
+- .NET 8/9, Minimal APIs vs Controllers, Clean Architecture, CQRS, MediatR
+- DI lifetimes (singleton/scoped/transient) and captive-dependency bugs
+- EF Core: change tracking, AsNoTracking, migrations, compiled queries, split queries
+- async/await, Task vs ValueTask, ConfigureAwait, deadlocks, cancellation tokens
+- Middleware pipeline, filters, model binding & validation
+- Performance: Span<T>, memory pooling, GC modes, benchmarking
+- Blazor (Server vs WASM) — gov intranet apps often use it
+- SignalR for real-time
+- .NET Aspire / Dapr — you list these; be ready to justify, not just name
+
+1.3 Node.js ✅
+
+- NestJS modules, providers, guards, interceptors, pipes
+- Express vs Fastify vs NestJS trade-offs
+- Event loop, libuv, worker threads, streams, backpressure
+- npm supply-chain security, npm audit, lockfile integrity, SBOM
+
+1.4 Frontend — React & modern web ✅
+
+- React 19: server components, Suspense, concurrent rendering, hooks rules, useMemo/useCallback misuse
+- State: Redux Toolkit vs React Query/RTK Query vs Context — when each
+- Next.js 15 App Router, SSR/SSG/ISR, edge runtime, caching layers
+- Micro-frontends & Module Federation — you claim it; expect "why not just a monolith SPA?"
+- Performance: Core Web Vitals, bundle splitting, hydration cost, Lighthouse CI
+- Accessibility WCAG 2.1/2.2 AA ⚠️ — near-mandatory for UAE government sites; know POUR, ARIA roles, keyboard nav, contrast ratios, screen-reader testing
+- Arabic / RTL & bilingual UI ❌ — dir="rtl", logical CSS properties, mirrored icons, Arabic fonts, i18n resource strategy, date/number/calendar (Hijri) formatting. Very likely asked at a UAE entity. Not on your CV.
+
+1.5 API design & integration ✅
+
+- REST maturity, resource modeling, idempotency, pagination, filtering, versioning strategies
+- OpenAPI 3.1 contract-first, code generation, contract testing (Pact)
+- GraphQL federation, N+1/dataloader, query cost limiting, persisted queries
+- gRPC, protobuf, when it's wrong
+- Webhooks, retries, exponential backoff, dead-letter queues, outbox pattern
+- Rate limiting, throttling, circuit breakers, bulkheads, timeouts
+- Integration with legacy/on-prem systems (SOAP, file drops, SFTP, ESB) ⚠️ — gov entities are full of these
+- Azure API Management ✅ — policies, products, subscriptions, JWT validation, backend pools, self-hosted gateway
+
+1.6 Architecture & solution design ✅
+
+- Microservices vs modular monolith — when a gov entity should not do microservices (great answer opportunity)
+- DDD bounded contexts, aggregates, ubiquitous language
+- Event-driven: choreography vs orchestration, SAGA, event sourcing, eventual consistency
+- CAP, idempotency, exactly-once vs at-least-once
+- Caching strategies: cache-aside, write-through, invalidation, Redis patterns
+- Resilience & DR: RTO/RPO, active-active vs active-passive, multi-region
+- Solution design deliverables ⚠️ — JD explicitly asks for these:
+  - HLD vs LLD, solution architecture document structure
+  - Data flow diagrams (DFD levels 0/1/2), C4 model, sequence diagrams, ERDs
+  - Interface specification documents — what goes in one
+  - Architecture Decision Records (ADRs), NFR catalogues, TOGAF awareness
+  - Be ready to draw one on a whiteboard/Teams whiteboard
+
+1.7 Databases & SQL ✅
+
+- Indexing (clustered/non-clustered/covering/filtered), execution plans, statistics
+- Query tuning, parameter sniffing, deadlocks, isolation levels, locking
+- Normalization vs denormalization, partitioning, sharding
+- PostgreSQL vs SQL Server specifics; T-SQL window functions, CTEs, MERGE
+- pgvector / vector indexes (HNSW, IVFFlat)
+- Migration strategy, zero-downtime schema changes, blue/green data
+
+---
+PART 2 — ENGINEERING DISCIPLINE (JD calls this out explicitly)
+
+2.1 Version control & code review ✅
+
+- Branching strategies: GitFlow vs trunk-based vs GitHub Flow — and which you'd impose here and why
+- Branch protection rules, required reviewers, CODEOWNERS
+- Conventional commits, semantic versioning, changelogs
+- What your code-review policy is: checklist, size limits, SLA on review turnaround
+- Merge vs rebase, cherry-pick, bisect, resolving a bad production merge
+
+2.2 Automated testing ✅
+
+- Test pyramid vs trophy; unit / integration / contract / E2E split
+- xUnit, PyTest, Vitest/Jest, Playwright
+- Test doubles, mocking boundaries, testcontainers
+- Coverage as a metric — its limits (be ready to defend your "90%+" claim)
+- Mutation testing, flaky test management, quality gates in CI (SonarQube)
+- Performance/load testing: k6, JMeter; test data management & PII-safe test data ⚠️
+
+---
+PART 3 — DEVOPS, CONTAINERS, CLOUD OPS
+
+3.1 Docker ✅
+
+- Multi-stage builds, layer caching, image size, distroless/chiseled base images
+- Non-root users, read-only filesystems, capability dropping
+- Image scanning (Trivy/Defender), signing (Notary/Cosign), registry hygiene, ACR
+
+3.2 Kubernetes & AKS ✅ — JD says "expertise", expect depth
+
+- Core objects: Pod, Deployment, StatefulSet, DaemonSet, Job/CronJob, Service, Ingress, ConfigMap, Secret
+- Scheduling: requests/limits, QoS classes, node affinity, taints/tolerations, PDBs, topology spread
+- Autoscaling: HPA, VPA, KEDA, Cluster Autoscaler, AKS node pools (system vs user), spot nodes
+- Networking: kubenet vs Azure CNI (+ Overlay), Network Policies, ingress controllers (NGINX / AGIC / Gateway API), private clusters
+- AKS-specific: managed identity, Workload Identity (replacing pod identity), Azure Key Vault CSI driver, Azure AD/Entra RBAC integration, Azure Policy for AKS, Container Insights, node image upgrades & cluster upgrade strategy, AKS Automatic
+- Storage: PV/PVC, Azure Disk vs Azure Files, StatefulSet volumes
+- Security: pod security admission, admission controllers, OPA/Gatekeeper or Kyverno, secrets management, image pull policy
+- Helm vs Kustomize; GitOps with ArgoCD/Flux — reconciliation, drift, secrets in Git (SOPS/Sealed Secrets)
+- Debugging: CrashLoopBackOff, OOMKilled, ImagePullBackOff, evictions, kubectl triage flow — very likely a live question
+- Service mesh awareness (Istio/Linkerd) — your own note says this is skills-only, so say so honestly
+
+3.3 CI/CD ✅
+
+- Azure DevOps Pipelines (YAML), multi-stage, environments, approvals & gates, variable groups, service connections, self-hosted agents
+- GitHub Actions: reusable workflows, OIDC federation to Azure (no secrets), environments
+- Deployment strategies: blue/green, canary, rolling, feature flags, database migration in the pipeline
+- Rollback, release notes, change-freeze windows (gov entities have them)
+- Pipeline security: least-privilege service principals, secret scanning, artifact provenance, SBOM, dependency scanning, SAST/DAST/container scan placement
+
+3.4 IaC ✅
+
+- Terraform: state management (remote backend, locking), modules, workspaces, plan/apply approvals, drift
+- Bicep/ARM ⚠️ — gov Microsoft shops prefer Bicep; know modules, what-if, deployment stacks
+- Azure Landing Zones, management groups, Azure Policy, subscription/naming/tagging strategy ❌ mostly
+
+3.5 Observability ✅
+
+- OpenTelemetry: traces/metrics/logs, context propagation, semantic conventions
+- Azure Monitor, Application Insights, Log Analytics + KQL ⚠️ (KQL also matters for Fabric Real-Time Intelligence — learn it once, use it twice)
+- SLI/SLO/SLA, error budgets, alerting & on-call, runbooks, post-incident reviews
+- Cost observability & FinOps: Azure Cost Management, budgets, tagging, rightsizing
+
+---
+PART 4 — SECURE DEVELOPMENT (JD calls it out; gov panel will press)
+
+- Input validation: allow-list vs deny-list, canonicalization, server-side enforcement, file upload validation (type sniffing, size, AV scan)
+- Injection: SQLi (parameterization), NoSQLi, command injection, LDAP injection, SSTI
+- Output encoding: XSS (stored/reflected/DOM), CSP, sanitization libraries
+- Authentication: OAuth 2.0 flows (auth code + PKCE, client credentials — and why implicit/ROPC are dead), OIDC, JWT validation (signature, aud, iss, exp, kid rotation), refresh token rotation, session management, MFA, SSO
+- Microsoft Entra ID ⚠️ (formerly Azure AD) — app registrations, enterprise apps, app roles vs groups vs scopes, conditional access, managed identity, B2B/B2C, SCIM provisioning. Gov entities run everything through Entra — know the vocabulary.
+- Authorization: RBAC vs ABAC vs ReBAC, least privilege, tenant/BU isolation, row-level authorization, IDOR/BOLA
+- OWASP Top 10 (2021) + OWASP API Security Top 10 ⚠️
+- CSRF, SSRF, CORS misconfiguration, clickjacking, security headers, HSTS
+- Secrets management: Key Vault, rotation, no secrets in code/CI logs, managed identity everywhere
+- Cryptography: TLS 1.2/1.3, mTLS, at-rest encryption, CMK vs PMK, hashing (Argon2/bcrypt), key rotation
+- Network security: private endpoints, VNet integration, NSGs, WAF, DDoS protection, zero-trust model
+- SDLC security: threat modeling (STRIDE), security requirements, pen-test remediation, vulnerability SLAs, DevSecOps gates
+- Logging & auditability: what must be logged, what must never be logged, tamper-evident audit trails, retention
+
+---
+PART 5 — DATA PLATFORM ❌ YOUR BIGGEST GAP — spend the most time here
+
+5.1 Microsoft Fabric ❌ (JD says "expertise in operating the data platform on Microsoft Fabric")
+
+- OneLake: single logical lake, Delta Parquet as the native format, shortcuts (internal & to ADLS/S3), Mirroring (SQL DB, Cosmos DB, Snowflake)
+- Workloads — know what each is for:
+  - Data Factory: pipelines, Dataflows Gen2, connectors, copy activity
+  - Data Engineering: Lakehouse, Spark notebooks, Spark job definitions, environments
+  - Data Warehouse: T-SQL warehouse, when vs Lakehouse SQL endpoint
+  - Data Science: notebooks, MLflow-backed experiments/models
+  - Real-Time Intelligence: Eventstream, Eventhouse/KQL DB, Activator (alerts)
+  - Power BI + semantic models
+  - Fabric SQL Database
+- Medallion architecture (bronze/silver/gold) and how you'd lay it out across workspaces
+- Direct Lake vs Import vs DirectQuery — the signature Fabric question; know fallback behavior
+- Capacity model: F SKUs, Capacity Units, bursting & smoothing, throttling, pause/resume, capacity metrics app, cost control
+- Workspace & domain strategy: domains/subdomains, workspace roles (Admin/Member/Contributor/Viewer), tenant settings
+- ALM: Git integration (Azure DevOps/GitHub), deployment pipelines, fabric-cicd, Fabric REST APIs, parameterization
+- Governance: Microsoft Purview integration, sensitivity labels & inheritance, endorsement (Promoted/Certified/Master data), lineage view, impact analysis, OneLake catalog, data loss prevention
+- Security: OneLake security/RLS, workspace vs item permissions, SQL endpoint permissions, private links, service principals
+- Fabric vs Synapse vs Databricks vs ADF — you have Synapse/Databricks/ADF on your CV, so bridge from there. This is your honest, credible answer.
+
+5.2 Power BI & semantic modeling ❌
+
+- Star schema — facts, dimensions, grain, surrogate keys, SCD Type 1/2, why star beats flat/snowflake in Power BI
+- Relationships: cardinality, cross-filter direction, bidirectional filtering dangers, role-playing dimensions, USERELATIONSHIP, inactive relationships, ambiguity
+- DAX: measures vs calculated columns, row context vs filter context, context transition, CALCULATE, filter modifiers (ALL, KEEPFILTERS, REMOVEFILTERS), iterators (SUMX), variables, time intelligence, DIVIDE
+- Storage modes: Import, DirectQuery, Composite, Dual, Direct Lake; aggregations; incremental refresh + policy
+- Performance: VertiPaq compression, cardinality reduction, Performance Analyzer, DAX Studio, Tabular Editor, VertiPaq Analyzer
+- Security: RLS static & dynamic (USERPRINCIPALNAME), OLS, workspace roles vs app audiences, sharing models
+- ALM: dev/test/prod workspaces, deployment pipelines, PBIP + TMDL in Git, shared/certified semantic models
+- Gateways: on-prem data gateway (standard vs personal), gateway clusters, refresh scheduling & failures
+- Self-service enablement (JD explicit): certified datasets, shared semantic models, dataflows, a Center of Excellence, training/enablement, workspace governance, Copilot in Power BI, usage metrics reports
+- Licensing: Pro vs PPU vs Fabric capacity vs Embedded
+- Report design: bookmarks, drillthrough, field parameters, paginated reports (SSRS lineage), row limits, RTL/Arabic report layouts ⚠️
+
+5.3 Data governance ❌ (JD: "applying data governance controls")
+
+- Data catalog, business glossary, data dictionary
+- Data ownership: data owner vs steward vs custodian
+- Data classification & sensitivity labels (public / internal / confidential / restricted)
+- Data quality dimensions (completeness, accuracy, timeliness, consistency, uniqueness) and how you'd measure them
+- Master data management, golden record
+- Lineage & impact analysis, data contracts
+- Retention, archival, right-to-erasure workflows
+- Microsoft Purview: data map, scanning, classification, DLP, insights
+- DAMA-DMBOK awareness, data governance operating model / council
+
+---
+PART 6 — POWER PLATFORM & LOW-CODE ❌ (JD: "custom code, Power platform, etc.")
+
+- Power Apps: canvas vs model-driven — when each; Power Fx; delegation limits (classic gotcha); responsive layouts; offline; performance
+- Power Automate: automated/instant/scheduled/desktop flows; approval actions = the JD's "human-in-the-loop"; error handling & retry policies; concurrency control; child flows; RPA
+- Dataverse: tables/columns/relationships, business rules, security model (business units, security roles, teams, column-level security, hierarchy security), plugins & custom APIs, virtual tables, choice of Dataverse vs SQL
+- ALM: managed vs unmanaged solutions, environment strategy (dev/test/prod), solution layering, Power Platform CLI, Power Platform Build Tools for Azure DevOps, environment variables, connection references
+- Governance: DLP policies, connector classification, CoE Starter Kit, tenant admin, capacity/licensing, citizen-developer guardrails — a gov panel cares more about this than about building apps
+- Power Pages — external-facing portals (relevant to "Website")
+- Copilot Studio ❌ — very likely in scope given "agentic": topics vs generative answers, knowledge sources, actions/connectors, agent flows, channels (Teams/web), authentication, DLP, analytics. This is where Power Platform meets the AI half of the JD.
+- Custom connectors, Azure Logic Apps vs Power Automate, integration with your pro-code services
+- When to say no to low-code and go pro-code — have a crisp answer
+
+---
+PART 7 — WEBSITE & INTRANET ❌⚠️ (an explicit accountability; nothing on your CV)
+
+- SharePoint Online — modern sites, communication vs team sites, hub sites, page structure, search, permissions & sharing, SPFx web parts/extensions, Viva Connections, Microsoft 365 admin basics
+- Alternative intranet stacks and CMS: Umbraco, Sitecore, WordPress, headless (Strapi/Contentful), Azure Static Web Apps
+- Public website ops: DNS, TLS certs, Azure Front Door/CDN, WAF rules, staging slots, cache purge, uptime monitoring
+- Content workflow: authoring, approval, publishing, versioning, rollback
+- Accessibility compliance — UAE government digital accessibility policy, WCAG 2.1 AA audits, remediation
+- Arabic/English bilingual + RTL, Hijri dates, Arabic search/indexing
+- SEO, analytics, consent/cookies, Core Web Vitals
+- Migration story: legacy CMS → modern platform without breaking URLs
+
+---
+PART 8 — AI / GENERATIVE AI CORE ⚠️✅
+
+8.1 LLM fundamentals
+
+- Transformers, attention, tokenization, context window, embeddings vs generation
+- Temperature, top-p, max tokens, stop sequences, seeds/determinism
+- Model selection: capability vs cost vs latency; small vs frontier models; open-weight vs API
+- Structured outputs: JSON schema/function-call mode, constrained decoding, retries on invalid JSON
+- Fine-tuning vs RAG vs prompting vs distillation — when each is right (near-guaranteed question)
+- PEFT/LoRA, quantization, self-hosting (Ollama/vLLM) vs managed
+- Hallucination — causes and mitigations
+- Azure OpenAI / Azure AI Foundry ✅: deployments, PTU vs pay-as-you-go, quotas & TPM, content filters, regional availability, private networking, data-residency guarantees
+
+8.2 Prompt & context engineering ⚠️ (JD names both)
+
+- System vs user vs assistant roles, few-shot, chain-of-thought, ReAct, self-consistency
+- Prompt templating & versioning, prompt as code, A/B testing prompts
+- Context engineering: what goes in the window and why — context budgeting, compaction/summarization, retrieval placement, lost-in-the-middle, tool-result pruning, memory tiers, caching
+- Prompt caching & cost implications
+- Output formatting, delimiters, refusal handling
+
+8.3 RAG ✅ — JD gives a full sub-list, expect depth
+
+- Ingestion: connectors, incremental sync, change detection, OCR/document intelligence, PDF/Office/scanned docs, tables & images, Arabic document handling ⚠️
+- Chunking: fixed vs recursive vs semantic vs layout-aware, chunk size & overlap trade-offs, parent-child/small-to-big, metadata enrichment
+- Embeddings: model choice, dimensionality, normalization, multilingual/Arabic embeddings, re-embedding on model upgrade, cost
+- Vector stores: Azure AI Search, pgvector, index types (HNSW/IVFFlat), filters, hybrid indexes, scale & refresh
+- Retrieval: hybrid (BM25 + vector), reranking (cross-encoder/semantic ranker), query rewriting/expansion, HyDE, multi-query, metadata filtering, security trimming / permission-aware retrieval ← the #1 gov question
+- Generation: grounding prompts, citations, "I don't know" behavior, answer verification
+- Advanced: GraphRAG, agentic RAG, contextual retrieval, multi-hop, table/SQL RAG (text-to-SQL over the data platform)
+- RAG evaluation: groundedness/faithfulness, answer relevance, context precision & recall, retrieval hit rate, golden question set; RAGAS, Azure AI Evaluation SDK
+
+8.4 Agentic AI ⚠️ (JD's headline feature)
+
+- Agent loop: plan → tool call → observe → repeat; ReAct, plan-and-execute, reflection
+- Tool/function calling: schema design, tool descriptions as prompts, argument validation, error feedback to the model, parallel tool calls, tool selection at scale
+- Workflow orchestration: LangGraph, Semantic Kernel agents, AutoGen, CrewAI, Azure AI Foundry Agent Service, durable orchestration (Durable Functions/Temporal) — and when a deterministic workflow beats an agent
+- Human-in-the-loop (JD explicit): approval gates, interrupt/resume, state checkpointing, escalation paths, approval UI, audit of who approved what — map this to Power Automate approvals for their world
+- State & memory: short-term, long-term, episodic; conversation persistence; multi-turn recovery
+- Multi-agent: supervisor/worker, handoffs, shared state, failure modes, cost explosion
+- MCP (Model Context Protocol) — servers, tools, resources, transport, auth; increasingly expected knowledge
+- Agentic harness (JD's exact term): sandboxing, tool registries, permission scoping, execution limits, loop/step caps, timeouts, budget caps, replayability, determinism/testing of agents
+- Agent failure modes: infinite loops, tool thrashing, prompt injection via tool output, over-agency
+
+8.5 LLMOps / evaluation / telemetry ⚠️ (JD explicit)
+
+- Automated evaluation harness: golden datasets, regression suites in CI, LLM-as-judge (+ its biases), human review loops, pairwise comparison, offline vs online eval
+- Metrics: groundedness, relevance, coherence, toxicity, task success rate, tool-call accuracy, retrieval metrics
+- Cost & token monitoring: per-request/per-tenant token accounting, budget alerts, model routing/downgrading, caching, batching, context trimming
+- Latency telemetry: TTFT, tokens/sec, p50/p95/p99, streaming, timeouts, fallback models
+- Tracing: LangSmith ✅, OpenTelemetry GenAI semantic conventions, Azure AI Foundry tracing/monitoring
+- Feedback loops: thumbs up/down, incident triage on bad answers, prompt regression management
+- Canary/shadow deployment of prompts and models; model version pinning & deprecation handling
+
+8.6 AI guardrails & AI security ❌⚠️ (JD explicit, gov panel will care most here)
+
+- OWASP Top 10 for LLM Applications — prompt injection, sensitive information disclosure, supply chain, data & model poisoning, improper output handling, excessive agency, system prompt leakage, vector/embedding weaknesses, misinformation, unbounded consumption
+- Prompt injection: direct vs indirect (poisoned documents/tool output), defenses — input/output separation, spotlighting, least-privilege tools, deterministic post-checks, never trusting model output as code
+- Content filtering: Azure AI Content Safety, prompt shields, groundedness detection, protected material detection, custom blocklists, severity thresholds
+- Output validation: schema validation, business-rule checks, citation verification, PII redaction, safe rendering (no raw HTML/markdown injection)
+- Tool permission scoping (JD phrase): per-agent identity, on-behalf-of user permissions, scoped tokens, read vs write tools, approval-required tools, blast-radius limits
+- Audit logging (JD phrase): prompt/response retention policy, who-asked-what, PII in logs, immutability, retention periods, access to logs
+- Data protection: no training on tenant data, data residency, private endpoints for AI services, redaction before the model call
+- Responsible AI frameworks: Microsoft Responsible AI standard, NIST AI RMF, ISO/IEC 42001, EU AI Act awareness, UAE National AI Strategy 2031 / Dubai AI ethics principles — mention these and you sound like you belong in a gov entity
+- Model/vendor risk, AI use-case intake & approval process, AI register/inventory
+
+8.7 Classic ML & MLOps ⚠️ (JD says "MLOps", not just LLMOps)
+
+- Supervised/unsupervised basics, train/val/test, overfitting, cross-validation
+- Metrics: precision/recall/F1, ROC-AUC, RMSE/MAE — and choosing per business problem
+- Feature engineering, leakage, class imbalance
+- Azure ML: workspaces, compute, pipelines, model registry, endpoints (managed online/batch)
+- MLflow, experiment tracking, model versioning, reproducibility
+- Deployment & monitoring: data drift, concept drift, model decay, retraining triggers, shadow deployment, A/B tests
+- The AI use-case lifecycle the JD spells out: assessment → data prep → build → test → validate → deploy → monitor → support. Be able to walk this end-to-end as a narrative with a real example.
+
+---
+PART 9 — GOVERNANCE, COMPLIANCE & UAE PUBLIC-SECTOR CONTEXT ❌ (nothing on your CV; huge differentiator)
+
+- UAE Federal Decree-Law No. 45 of 2021 (PDPL) — lawful basis, data subject rights, cross-border transfer rules
+- Data residency: Azure UAE North / UAE Central, sovereign cloud, why AI services region choice matters
+- Dubai / Abu Dhabi specifics: Dubai Data Law and data classification (open / shared / confidential / sensitive / secret), Digital Dubai policies, ISR (Information Security Regulation), NESA / UAE Information Assurance Standards, TDRA guidance, ADGM/DIFC regimes
+- ISO 27001 / ISO 27701 awareness; internal audit expectations
+- Records management & retention obligations in government
+- ITIL / service management (JD: "manage the enhancement backlog and execute planned maintenance"): incident / problem / change / release management, CAB & change windows, SLAs/OLAs, priority matrix, RCA reports, service catalogue, ServiceNow-style tooling
+- Backlog management: intake, triage, prioritization (MoSCoW, WSJF, value vs effort), roadmap communication, capacity planning, tech-debt budget
+- Vendor & procurement reality: RFP/RFI, SOWs, managing an SI partner, UAE tender processes, ICV
+- Documentation standards: as-built docs, runbooks, SOPs, handover packs, knowledge base
+- Working with non-technical government stakeholders; Arabic-language stakeholders; Emiratisation context; UAE work-week (Mon–Fri) and Ramadan hours
+
+---
+PART 10 — SYSTEM DESIGN SCENARIOS TO REHEARSE (whiteboard-ready)
+
+Practice drawing each end-to-end with data flow, auth, and failure modes:
+1. An internal AI assistant over the intranet's documents — permission-trimmed RAG on SharePoint content, Entra auth, citations, audit log, eval harness, cost caps. (Most likely question in the whole interview.)
+2. An agentic workflow with human approval — e.g. auto-drafting a response/permit/request, routed for officer approval, with tool scoping and full audit trail
+3. Migrating scattered Excel reporting into Fabric + Power BI — ingestion, medallion, semantic model, RLS, certified datasets, self-service rollout, capacity cost
+4. A public-facing service portal — React/.NET on AKS, APIM, WAF, Entra B2C, bilingual, WCAG, DR
+5. Modernizing a legacy on-prem intranet app — strangler pattern, data migration, cutover, rollback plan
+6. Standing up CI/CD + branching + code review from zero in a team that has none
+7. Document intelligence pipeline — scanned Arabic/English PDFs → structured data → validation → downstream system
+8. An AI evaluation & monitoring platform — golden sets, CI gates, token/cost dashboards, quality alerts
+
+---
+PART 11 — YOUR CV'S SOFT SPOTS (prepare defenses, not excuses)
+
+A sharp panel will poke exactly here:
+1. Breadth vs depth — .NET + Node + Python + React + Angular + Vue + Azure + AWS + K8s + GenAI on one CV reads as a red flag to senior engineers. Have a one-line honest framing: what you're deep in vs what you're conversational in. Volunteering this earns credibility; getting caught costs everything.
+2. The zero on the data platform — you have Synapse, Databricks, ADF, ClickHouse, Redshift, Pandas. Bridge from those to Fabric/Power BI explicitly, and say plainly what you've built vs studied.
+3. Metrics you must be able to defend: 200K+ daily events, 99.99% message reliability, sub-second APIs, 90%+ coverage, "under 5 minutes" provisioning, "zero security incidents". Know how each was measured.
+4. Tenure pattern — GAC 10 months, 7X ~2 years, and why you're moving now. Have a calm, non-negative answer.
+5. AWS-heavy recent work vs a Microsoft-only JD — frame it as strengthening, not diluting, your Azure depth.
+6. Master's (Nov 2022–Nov 2024) overlapping full-time work — be ready if asked.
+7. AZ-305 with no dates listed — know when you passed it.
+8. "Agentic" claims — AutoGen/CrewAI/Semantic Kernel are on your CV. If you haven't shipped multi-agent to production, say what you have shipped and where the rest is lab work.
+9. Gov sector experience = none — pre-empt it with the compliance vocabulary from Part 9.
+10. Salary, notice period, visa transfer — decide your numbers before the call.
+
+---
+PART 12 — QUESTIONS TO ASK THEM (a panel judges you on these)
+
+- Is Fabric already in place, or is this a greenfield build? What's on it today?
+- Who owns the data platform vs the apps vs AI — or is this genuinely one person?
+- What's the current AI use-case pipeline, and what's actually in production?
+- What's the approval path for a new AI use case — is there an AI governance committee?
+- Where does the intranet live today — SharePoint, or custom?
+- What's the split between in-house build and SI/vendor delivery?
+- What does the enhancement backlog look like — size, age, biggest source of tickets?
+- What's the change management / release window process?
+- Data residency and sovereignty constraints on AI services?
+- What does success look like at 6 and 12 months?
+
+---
+PART 13 — 48-HOUR PLAN (today Mon 17 → Wed 19 Aug, 2:00 PM)
+
+Monday evening (3–4h) — Part 5 in full: Fabric architecture + Power BI star schema/DAX/Direct Lake/RLS. This is the gap that can sink you; it's also the most learnable in one sitting.
+Tuesday morning (3h) — Part 6 (Power Platform ALM, DLP, Dataverse security, Copilot Studio) + Part 9 (UAE compliance vocabulary).
+Tuesday afternoon (3h) — Parts 8.4–8.6 (agentic harness, HITL, eval, guardrails, AI security) — rehearse out loud, these are your differentiators.
+Tuesday evening (2h) — Draw scenarios 1, 2 and 3 from Part 10 by hand, twice each.
+Wednesday morning (2h) — Part 11 defenses out loud, Part 12 questions written down, skim Parts 1–4 (your strengths — refresh, don't study).
+Wednesday 12:30 — stop studying. Tech check, screen-share/whiteboard tool ready, JD and CV printed.
+
+---
+Two things worth deciding now:
+
+One honest note — your own rule (skills list vs work-experience bullet) applies double in a live panel. On Fabric, Power BI and Power Platform, the winning answer is "I haven't operated Fabric in production; I've built the equivalent on Synapse and Databricks, and here's how I'd map it" — a panel forgives a gap, but never a bluff they can unravel in two follow-ups.
+
+Want me to turn any section into a full Q&A drill with model answers keyed to your actual CV evidence? I'd start with Part 5 (Fabric/Power BI) since it's the gap, and Part 8.4–8.6 (agentic harness, guardrails, AI security) since that's where you can outclass every other candidate.
