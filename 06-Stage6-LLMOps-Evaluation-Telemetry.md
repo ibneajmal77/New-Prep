@@ -1027,7 +1027,7 @@ continuously, are how you detect drift away from a golden set that was built mon
 | Job | How |
 |---|---|
 | Instrumentation | OpenTelemetry SDK, GenAI semantic conventions |
-| Framework-native | LangSmith for LangChain/LangGraph; Foundry tracing for Azure agents |
+| Framework-native | LangSmith for LangChain/LangGraph; Foundry tracing for Azure agents; LangFuse and Helicone as self-hostable alternatives; `openllmetry` for an OTel-native drop-in |
 | Correlation | Propagate one trace ID across model, retrieval, tool and approval spans |
 | Storage | Application Insights / Azure Monitor, in the approved region |
 | Redaction | Hash or ID substitution at span-write time, not afterwards |
@@ -1378,6 +1378,59 @@ users are to complain, not whether quality regressed.
 - **Model deployment changed while the prompt stays tuned to old behaviour.**
 - **Tool schema changes invalidating prompt caching and tool selection.**
 - **A forced deprecation migration performed without an evaluation baseline.**
+
+---
+
+## 8.5.11 AI gateway — centralizing routing, auth, cost and observability across apps `+`
+
+> **In the build:** Stage 6 (companion) — everything above this line was written as if one
+> application calls one model. The moment a **second** GenAI application ships, every one of
+> those concerns — rate limits, cost attribution, model routing, audit logging — either gets
+> duplicated per app or centralized. This is the centralized shape.
+
+**Definition** — An AI gateway is a single proxy that every GenAI application in the
+organisation calls *through*, instead of calling model providers directly. It is the same idea
+as an API gateway (8.6.5's on-behalf-of pattern, 8.6.12's rate limiting) applied specifically to
+LLM traffic, and it exists because per-request-billed, provider-diverse, high-volume LLM traffic
+has operational needs a generic API gateway wasn't built for.
+
+**Example — what moves behind the gateway, and why:**
+
+| Concern | Without a gateway | With a gateway |
+|---|---|---|
+| Provider credentials | Every app holds its own API keys | One place holds keys; apps authenticate to the gateway |
+| Cost attribution | Reconstructed after the fact from scattered logs (8.5.3) | Tagged per app/team at the point of the call — the source of truth |
+| Rate limits / quota | Enforced (or not) per app, inconsistently (8.6.12) | Enforced once, consistently, per app and per tenant |
+| Model routing / fallback | Each app hardcodes its provider (8.1.3) | Centrally configured: route by cost/latency, fail over on outage |
+| Caching | Each app builds its own prompt/semantic cache (8.2.5, 8.3.10) | Shared cache layer, higher hit rate across apps |
+| Audit logging | Each app logs (or doesn't) independently (8.6.6) | One consistent, complete record of every model call org-wide |
+| PII / content filtering | Each app integrates its own (8.6.3, 8.6.4) | Enforced as a shared, non-optional layer |
+
+**Where it fits** — sits in front of every application in this entire body of material, at the
+point where a request would otherwise go straight to a model provider. It does not replace
+per-application guardrails (8.6.1–8.6.13) — it is where org-wide policy is enforced consistently,
+while each application still owns its own prompt, retrieval and agent-specific controls.
+
+**Library** — Azure API Management with its AI gateway capabilities (token metering, semantic
+caching, load balancing across deployments); `LiteLLM` proxy; Portkey; Kong AI Gateway. All solve
+the same problem at different levels of managed-ness — *verify* current feature parity before
+choosing.
+
+**Used when** — more than one GenAI application exists, or will soon; especially wherever cost
+attribution to a specific team or product must be defensible, or a single provider outage must
+not take down every application at once.
+
+**Fails when**
+- Adopted for a single application, where it adds a hop and an operational dependency for no
+  benefit — the threshold is "more than one app," not "day one."
+- Treated as a substitute for application-level guardrails rather than a *complement* to them —
+  a shared filter catches org-wide policy violations, not a specific application's business
+  rules.
+- Becomes an unowned, unmonitored single point of failure for every GenAI app in the
+  organisation — it needs the same SLOs (8.5.8) and on-call ownership as any other shared
+  platform dependency.
+- API keys are moved behind the gateway but per-app scoping is not enforced, so a single
+  compromised app can exhaust another app's quota or budget.
 
 ---
 

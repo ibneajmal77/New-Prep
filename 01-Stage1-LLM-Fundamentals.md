@@ -2136,6 +2136,16 @@ client = OpenAI(base_url="http://gpu-node:8000/v1", api_key="not-used")
 | GPU for a 7–8B model | 1× 24GB (FP16) or 1× 8–12GB (4-bit) | Concurrency raises this |
 | GPU for a 70B model | 2× 80GB (FP16) or 1× 48GB (4-bit) | Verify against your serving config |
 
+**Advanced serving techniques worth knowing by name.** Beyond continuous batching and paged KV
+cache (Section 4), production self-hosted serving increasingly uses **speculative decoding**: a
+small, fast "draft" model proposes several tokens ahead, and the large model verifies them in one
+pass instead of generating each token sequentially. Verified tokens are kept for free; a rejected
+token falls back to normal generation from that point. This trades a second model (memory and
+complexity) for lower latency at *no* quality loss — the large model still determines every
+accepted token, it just checks several candidates per forward pass instead of generating one.
+`vLLM` and TGI both support it; *verify* current support and draft-model compatibility with your
+target model before planning around it.
+
 ### 8. Perspectives grid
 
 | Lens | What matters here |
@@ -3133,6 +3143,163 @@ picked up properly in 8.3.1.3 and 8.3.1.4.
 - **Forgetting images are an injection vector.** Instructions printed inside an image are read
   and can be followed.
 - **Assuming every deployment is multimodal.** It is a model capability — check before routing.
+
+---
+
+## 8.1.12 Multimodal generation — image and audio output `+`
+> **In the build:** Stage 1, Step 11 (companion) — *"half the source material is a photograph — and some answers need to leave as one too."*
+
+### 1. Definition
+
+```
+   8.1.11 IS THE MODEL READING AN IMAGE. THIS IS THE MODEL PRODUCING ONE.
+
+   ┌─────────────────────────────────────────────────────────────────┐
+   │  TWO SEPARATE PIPELINES, OFTEN CALLED BY THE SAME "AI FEATURE"   │
+   │                                                                   │
+   │  Text answer ──► [TTS model]              ──► audio bytes        │
+   │  Text prompt ──► [Diffusion / image model] ──► image bytes       │
+   │                                                                   │
+   │  Neither of these is the chat model finishing its sentence.      │
+   │  Each is a DIFFERENT model, called as a separate step — usually  │
+   │  triggered BY a tool call the chat model makes (8.4.2), not      │
+   │  something the chat model does itself.                           │
+   └─────────────────────────────────────────────────────────────────┘
+
+   A THIRD, NEWER SHAPE: natively multimodal models generate image or
+   audio TOKENS in the same autoregressive stream as text — one model,
+   one call, no separate pipeline. Capability and cost differ sharply
+   by provider; *verify per model* before assuming either shape.
+```
+
+**Plain English:** 8.1.11 was the model looking at a picture you hand it. This is the reverse —
+asking it to hand *you* a picture, or read an answer aloud.
+
+**Precisely:** Generative multimodal output covers image generation (text/image → new image,
+usually via a diffusion model), audio generation (text → speech, usually via a dedicated TTS
+model), and — increasingly — natively multimodal models that emit non-text tokens directly in
+the same generation stream as their text output. These are architecturally distinct from 8.1.1's
+generation loop and are usually billed, latency-profiled and safety-filtered on entirely
+different terms than a text or vision-input call.
+
+### 2. Scenario
+
+Two requests land in the same sprint. Accessibility asks for the leave-balance answer to be
+read aloud for a screen-reader user. Onboarding asks for a simple auto-generated diagram of the
+approval workflow to drop into a welcome email. Both get called "just add multimodal" in the
+ticket. Neither is a parameter on the chat completion call — both are separate models, separate
+APIs, separate cost lines, and (for the audio one) an immediate question the ticket didn't
+answer: **read aloud in Arabic too, or only English?**
+
+### 3. Example
+
+```python
+# ── Image generation: a different model, a different bill ────────────────
+img = client.images.generate(
+    model="gpt-image-1",
+    prompt="A simple 4-step flat-style diagram of a leave approval workflow, "
+           "labelled: Submit, Manager review, HR review, Approved.",
+    size="1024x1024",
+    quality="standard",        # "high" quality is priced separately and higher
+)
+# Billed per image, not per token. Latency is seconds, not the sub-second
+# streaming behaviour text generation trained you to expect (8.1.10).
+
+# ── Audio generation: text answer, read aloud ──────────────────────────
+speech = client.audio.speech.create(
+    model="tts-1",
+    voice="alloy",              # voice is a model choice, not a prompt instruction
+    input=answer_text,          # the ALREADY-GENERATED text answer, not a fresh prompt
+)
+speech.stream_to_file("answer.mp3")
+# Arabic support, if needed, is a MODEL capability to verify, not a language
+# parameter you can just set (8.3.1.4's Arabic-handling lesson applies here too).
+```
+
+### 4. How it works
+
+**Image generation.** The dominant mechanism is diffusion: start from random noise, and run many
+denoising steps, each conditioned on the text prompt's embedding, until the noise resolves into
+an image matching the prompt. More denoising steps and higher output resolution both mean more
+compute, which is why image APIs price by size/quality tier rather than by an input/output token
+count — the pricing model from 8.1.2 does not transfer.
+
+**Audio generation (TTS).** A dedicated model converts text into an audio waveform — sequence
+input, dense audio output, quality and available voices/languages entirely dependent on the
+specific TTS model chosen. Latency scales with output audio duration, not input text length in
+the way LLM latency scales with output tokens.
+
+**Natively multimodal generation.** Some newer models generate image or audio tokens in the same
+autoregressive stream used for text (8.1.1's loop, extended to a larger vocabulary that includes
+non-text tokens). One call, one model, one bill — but capability, quality and even availability
+of this mode are provider- and model-specific and change fast; *verify per model*.
+
+**The orchestration pattern that actually matters in production:** the chat model does not
+generate the image or audio itself in the two-pipeline shape. It decides *that* generation is
+needed and *what* to ask for — typically by emitting a tool call (8.4.2) — and application code
+invokes the image or speech model as a separate step. This means generative multimodal output is
+usually an **agentic pattern**, not a chat-completion parameter: same agent loop as 8.4.1, with an
+image or audio model standing in for a database lookup as the tool being called.
+
+### 5. Where it fits
+
+```
+   model / deployment (text)
+      │
+   decoding                 ◄── the chat model finishes here, having decided
+      │                          generation is needed (often via a tool call)
+   output shaping
+      │
+▶  A SEPARATE MODEL CALL  ◀ ─── image model or TTS model, own latency, own cost,
+      │                          own safety filter, own capability matrix
+   response + telemetry     ◄── log this call's cost and latency SEPARATELY —
+                                 folding it into "the LLM call" hides both
+```
+
+### 6. Libraries & code
+
+| Job | Library / API |
+|---|---|
+| Image generation | OpenAI Images API (`gpt-image-1`, DALL·E), Azure OpenAI image deployments, Stability AI, self-hosted Stable Diffusion |
+| Text-to-speech | OpenAI Audio Speech API, Azure AI Speech, ElevenLabs |
+| Speech-to-text (the input-side counterpart) | Whisper API — this is 8.1.11's territory, not this section's |
+| Native multimodal output | Provider-specific — *verify current capability per model* |
+
+### 7. Knobs & real numbers
+
+| Knob | Effect |
+|---|---|
+| Image size / resolution | Larger sizes cost more; priced per image, not per token |
+| Image quality tier | "High"/"HD" tiers typically cost several times the standard tier |
+| Voice / TTS model tier | Higher-fidelity voices cost more per character or per minute |
+| Output format (audio) | Compressed formats reduce bandwidth, not generation cost |
+| Generation latency | Seconds, not milliseconds — plan async/job UX, not a blocking call |
+
+### 8. Perspectives grid
+
+| Lens | What matters here |
+|---|---|
+| **Theory** | Diffusion (denoising) and autoregressive audio generation are different generative mechanisms from 8.1.1's next-token loop, even when a provider exposes them behind one SDK. |
+| **Engineering** | Treat as a distinct tool the agent calls (8.4.2), not a flag on the chat completion. Route synchronously for short TTS clips, asynchronously (job + poll or webhook) for images. |
+| **Operations** | Latency is seconds, and both image and audio generation can fail or be filtered independently of the text call that triggered them — instrument and alert on each separately. |
+| **Cost** | Per-image and per-character/per-minute pricing, not per-token — it will not show up in a token-based cost dashboard (8.5.3) unless logged as its own line item. |
+| **Security** | Generated images and audio are model output a user sees or hears directly — the output-validation and content-filter obligations from 8.6.3/8.6.4 apply here too, plus a new risk: generating disallowed imagery on request. |
+| **Decision** | Only add generative image/audio output where the ticket's actual need is generation, not retrieval — a static onboarding diagram or a recorded voice line is often cheaper and more reliable than generating one per request. |
+
+### 9. Trade-offs & failure modes
+
+- **Assuming image/audio generation shares the text model's cost and latency profile.** It does
+  not — different pricing unit, latency in seconds, and it will not appear in per-token cost
+  telemetry unless logged separately.
+- **Calling it synchronously inside a request the user is waiting on.** A 5–20 second image
+  generation blocking a chat response reads as a hang, not a slow answer.
+- **Skipping content moderation on generated output because "the model already refuses unsafe
+  requests."** Generated images and audio still need the same output-validation discipline as
+  generated text (8.6.4).
+- **Assuming Arabic (or any non-English) voice/quality parity with English** without checking the
+  specific TTS model's language support — the same lesson 8.3.1.4 already taught for OCR.
+- **Treating a natively multimodal model's output capability as fixed.** It is one of the fastest-
+  moving capability surfaces across providers; *verify per model* before designing around it.
 
 ---
 

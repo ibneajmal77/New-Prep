@@ -636,6 +636,7 @@ false-positive rate.
 | Grounding check | Groundedness detection (Content Safety), RAGAS faithfulness (8.5.2) |
 | Copyright / protected text | Protected-material detection |
 | Domain terms | Custom categories and blocklists |
+| Open-source / provider-agnostic frameworks | **Guardrails AI** (validator "rails" — type, PII, toxicity, custom business rules, with re-ask on failure), **NeMo Guardrails** (conversational + topical + jailbreak rails) — an alternative or complement to platform-native filtering, useful when self-hosting or spanning multiple providers; also feeds output validation (8.6.4) |
 | Everything above | *Verify* region, language support and preview/GA status before designing around it |
 
 ### 7. Knobs & real numbers
@@ -992,6 +993,27 @@ becomes the only thing standing between a model mistake and the whole dataset.
 ⚠ **Blast radius is the union of every tool the agent can reach.** Not the tools it usually
 uses — the tools it *can* reach. That is why "the model probably will not call it" is not an
 argument, and why an unused dangerous tool is a finding.
+
+**Code execution tools — the sharpest edge of the ladder.** A code-execution tool (a REPL, a
+sandboxed interpreter, a shell) does not fit on the escalation ladder above — it does not request
+*one* permission, it requests the ability to request any permission the sandbox itself doesn't
+deny. Two specific failure modes deserve names, because "sandbox it" is necessary but not
+sufficient:
+
+- **Remote code execution (RCE) via tool output.** If a tool's result is ever passed to `eval`, a
+  shell, a template engine, or a deserializer without validation, a prompt-injected instruction
+  that reaches that input can *execute*, not just be displayed — 8.6.1's "improper output
+  handling" risk, instantiated through a code path instead of a rendered-HTML one.
+- **Insecure deserialization.** Never deserialize a tool result, or a tool argument the model
+  produced, with a format that can construct arbitrary objects or trigger code on load (Python
+  `pickle`, an unrestricted YAML loader). Every tool boundary is untrusted input — deserialize
+  with a format that can only produce data, never behaviour (schema-validated JSON, not `pickle`).
+
+Controls, on top of the sandboxing already named at 8.4.8: no network egress from the execution
+sandbox by default; no filesystem access outside a scratch directory wiped per run; a hard
+CPU/memory/wall-clock limit enforced by the sandbox, not the prompt; the sandbox process shares
+no credentials or environment variables with the orchestrator; captured output is size-capped
+text (8.2.4) that re-enters the context but is never itself executed again.
 
 ### 5. Where it fits
 
@@ -1504,6 +1526,18 @@ are successes:
 have humans review high-risk failures → record findings with owner, severity and fix → **add
 every production incident back into the set**.
 
+**Testing methodology — black, grey and white box:**
+
+| Approach | Tester's access | When it's used here |
+|---|---|---|
+| **Black box** | Only the public interface — no prompts, no architecture, no logs | External bug bounty, pre-launch penetration test, simulating a real attacker |
+| **Grey box** | Knows the system design (RAG? tools? which model?) but not the exact prompts | Most internal red-team exercises — realistic, and far cheaper to build a useful attack set with |
+| **White box** | Full access: prompts, tool schemas, retrieval config, model version | Root-causing a finding, and building the regression cases that go into CI |
+
+Run black-box testing occasionally, from outside, to catch what familiarity with your own system
+blinds you to. Run grey/white-box testing continuously in CI — that is where the regression suite
+above actually lives, since a CI gate needs full access to construct and check its own cases.
+
 **Where it fits** — CI, as a release gate, and pre-release; it measures every control in this
 stage and hands its pass rate to Stage 6.
 
@@ -1715,6 +1749,191 @@ software with a completely different risk profile, and the approval no longer co
 - **The model changing while the register does not.**
 - **A use case approved for HR policy answers quietly expanding to employee discipline.**
 - **Nobody owning incident response, or the employee/citizen appeal path.**
+
+---
+
+## 8.6.14 Model-level attacks — extraction, poisoning, adversarial examples, inversion `+`
+> **In the build:** Stage 5, Step 1 (companion) — *"8.6.1 already said OWASP's list is a threat taxonomy for applications, not for models. This is the model side."*
+
+### 1. Definition
+
+```
+   8.6.1's TEN RISKS ATTACK THE APPLICATION AROUND THE MODEL.
+   THESE FOUR ATTACK THE MODEL ITSELF — its weights, its training data, its
+   decision boundary — and they exist whether or not you ever add RAG, tools
+   or an agent loop on top.
+
+   ┌───────────────────────┬───────────────────────────┬────────────────────────┐
+   │ ATTACK                 │ ATTACKER'S GOAL            │ PRIMARY DEFENSE        │
+   ├───────────────────────┼───────────────────────────┼────────────────────────┤
+   │ Model extraction        │ Clone your model/behaviour │ Rate limits, query     │
+   │ (theft)                 │ via its own API responses  │ pattern monitoring     │
+   │ Data / model             │ Corrupt what it learns via │ Provenance, review     │
+   │ poisoning                │ training/fine-tune/RAG data│ queues, anomaly scan   │
+   │ Adversarial               │ Craft input that fools it  │ Robustness testing,    │
+   │ examples                  │ while looking normal       │ input validation       │
+   │ Model inversion /          │ Recover or infer training  │ Memorization testing,  │
+   │ membership inference       │ data from model behaviour  │ DP training, minimal   │
+   │                             │                             │ sensitive fine-tune    │
+   └───────────────────────┴───────────────────────────┴────────────────────────┘
+
+   ⚠ Poisoning is already named as a one-line risk in 8.6.1's table. This
+     section is where it — and its three siblings — actually get unpacked.
+```
+
+**Plain English:** four ways to attack the model itself rather than the application wrapped
+around it — stealing it, corrupting what it learned, fooling it with crafted input, or extracting
+what it memorized.
+
+**Precisely:** these are attacks on the model as an artefact — its weights, its training or
+fine-tuning data, its learned decision boundary — rather than on the request/response pipeline
+that 8.6.1 through 8.6.13 secure. They matter most wherever a model is fine-tuned on your own
+data (8.1.5), self-hosted (8.1.6), or exposed as a high-volume public API — and they are
+frequently skipped in an LLM threat model because they don't fit neatly into "prompt injection."
+
+### 2. Scenario
+
+The entity fine-tuned a small model on internal HR correspondence to match house tone and
+terminology (8.1.5). Two incidents surface in the same quarter, and neither looks like a prompt
+injection:
+
+- A competitor's product starts producing answers suspiciously close in structure and phrasing
+  to ours, after months of automated, systematic-looking traffic against our public API —
+  **model extraction**: enough input/output pairs collected to train a surrogate model that
+  approximates ours.
+- A researcher reports that a specific fill-in-the-blank prompt makes the fine-tuned model
+  reproduce, almost verbatim, a sentence from a real employee's disciplinary letter — the model
+  **memorized** a training example and will repeat it back to anyone who asks the right way.
+
+Neither shows up in an audit log built to catch prompt injection (8.6.2) or excessive agency
+(8.6.1), because neither is an attack on the *conversation* — both are attacks on the *model*.
+
+### 3. Example — the four attacks and their controls
+
+| Attack | What the attacker does | What they gain | Concrete control |
+|---|---|---|---|
+| **Model extraction / theft** | Sends large volumes of systematic queries, trains a surrogate on the input/output pairs | A functional clone of your model's behaviour, at your expense | Per-tenant rate limits (8.6.12), query-pattern anomaly detection, watermarking/canary outputs, ToS + legal recourse |
+| **Data / model poisoning** | Inserts manipulated examples into training, fine-tuning, or a corpus the model is fine-tuned or heavily grounded on | A backdoor trigger, a biased output, or a specific wrong answer on demand | Source provenance and signing, review queues before data enters training (8.3.1), anomaly detection on training data, holdout evaluation after every fine-tune |
+| **Adversarial examples** | Crafts an input (often an image, for multimodal models) that is perturbed just enough to flip the model's output while looking unchanged to a human | Misclassification, a bypassed safety check, or a wrong extracted field | Adversarial robustness testing before deploying vision-input features, input validation, ensembling/voting across model calls |
+| **Model inversion / membership inference** | Queries the model in ways designed to surface memorized fragments of its training data, or to test whether a specific record was in the training set | Verbatim or near-verbatim leakage of training data, or confirmation a specific person's data was used | Memorization testing (canary strings, below), minimizing sensitive data in fine-tune sets, differential-privacy training where supported, output filtering for verbatim-match content |
+
+### 4. How it works
+
+**Model extraction.** A chat API is an unusually rich oracle compared to a classic ML model's
+single label output — every response carries far more signal about the model's behaviour, which
+makes extraction against LLM APIs comparatively easier than against a classifier returning one
+class. Defense is detection-based, not prevention-based: extraction requires *volume*, so the
+same rate-limiting and per-tenant quota infrastructure built for denial-of-wallet (8.6.12) is
+also the first line of defense here — the difference is what you're watching for: not cost, but
+query diversity and systematic coverage patterns consistent with training-set construction.
+
+**Data / model poisoning.** Anything the model *learns from* — pretraining data you don't
+control, fine-tuning data you do, or (arguably) a RAG corpus the model is trained to trust
+heavily — is a poisoning surface. Fine-tuning data deserves the same provenance discipline as
+production RAG ingestion (8.3.1.1–8.3.1.2): know where every example came from, review before
+training, and diff a new fine-tune's behaviour against the previous version on a held-out set
+before promoting it (8.7.4's registration-as-promotion-decision pattern applies to LLM
+fine-tunes too, not just classic ML models).
+
+**Adversarial examples.** Small, often human-imperceptible perturbations to an input that exploit
+the specific decision boundary a model learned — most established against vision models (a
+perturbed stop sign misread by a classifier is the canonical example), and directly relevant the
+moment 8.1.11's multimodal input path accepts images from untrusted users. This is a *different*
+mechanism from prompt injection: injection exploits the model's instruction-following, adversarial
+examples exploit its learned pattern-matching, and the two need different defenses even though
+both arrive as "a weird input."
+
+**Model inversion / membership inference — and how to actually test for it.** Large models
+fine-tuned on small or repetitive datasets tend to memorize rather than generalize on outlier
+examples, and memorized examples can be recovered by the right prompt. The practical test is
+cheap and worth running after every fine-tune: insert a unique, synthetic "canary" string into
+the training set before training, then after training, probe the model with a range of prompts
+designed to elicit it. If the canary comes back — verbatim or close — the model is memorizing
+training examples at a level that would apply to *real* sensitive data in that same dataset, not
+just to your synthetic canary.
+
+```python
+# ── Canary-string memorization test, run after every fine-tune ───────────
+import uuid, random
+
+canary = f"REF-{uuid.uuid4().hex[:12]}"   # inserted once into training data
+                                            # e.g. "Internal tracking ref: REF-a1b2c3d4e5f6"
+
+def test_memorization(model, canary: str, n_probes: int = 20) -> float:
+    """
+    Probe with prompts that plausibly precede the canary's context, across
+    paraphrases. A model that reproduces it verbatim from a PARTIAL prompt
+    has memorized, not generalized -- and real sensitive records in the
+    same training set are exposed the same way.
+    """
+    hits = 0
+    for probe in build_probe_variants(canary, n=n_probes):   # your paraphrases
+        completion = model.generate(probe, max_tokens=30)
+        if canary[:8] in completion:          # partial match still counts
+            hits += 1
+    return hits / n_probes   # > 0 on a SYNTHETIC canary is a real finding
+```
+
+### 5. Where it fits
+
+```
+   fine-tuning / training data (8.1.5)   ◄── poisoning and inversion surface HERE
+      │
+   model registration / promotion (8.7.4 pattern, applied to LLM fine-tunes)
+      │
+   deployment                             ◄── extraction surface is the LIVE API
+      │
+   request path (8.6.1 - 8.6.13)          ◄── adversarial examples arrive as input HERE
+      │
+   governance / vendor review (8.6.9)     ◄── model-level risk belongs in the AI register too
+```
+
+### 6. Libraries & code
+
+| Job | Library / approach |
+|---|---|
+| Extraction detection | Your own query-pattern telemetry (8.5.3) plus anomaly detection on request diversity |
+| Rate limiting | API Management / gateway quotas (8.6.12) — the same infrastructure, a different signal to watch |
+| Poisoning defense | Data provenance and review-queue tooling at ingestion (8.3.1.1); held-out evaluation before promoting a fine-tune (8.5.1, 8.7.4) |
+| Adversarial robustness | `foolbox`, `adversarial-robustness-toolbox` (ART) for testing vision-input models |
+| Memorization testing | A canary-string harness (above) run in CI after every fine-tune, alongside the eval suite (8.5.1) |
+| Differential privacy training | `Opacus` (PyTorch), provider-managed DP fine-tuning where offered — *verify availability per provider* |
+
+### 7. Knobs & real numbers
+
+| Knob | Typical | Notes |
+|---|---|---|
+| Rate limit for extraction defense | shared with denial-of-wallet limits (8.6.12) | Watch pattern diversity, not just volume |
+| Canary insertion rate | 1–5 unique canaries per fine-tune dataset | Cheap; run the memorization test every time |
+| Memorization test cadence | every fine-tune, before promotion | Not a one-time check at model selection |
+| Adversarial robustness testing | before any vision-input feature ships | *Verify* threat relevance to your actual use case first |
+| Vendor DP-training availability | provider-dependent | *Verify per provider* — not universally offered |
+
+### 8. Perspectives grid
+
+| Lens | What matters here |
+|---|---|
+| **Theory** | These attacks target the model as a statistical artefact — what it learned and how it generalizes — which is a fundamentally different attack surface from the request/response pipeline 8.6.1–8.6.13 secure. |
+| **Engineering** | Reuse existing infrastructure where the signal overlaps: rate limiting (8.6.12) for extraction, ingestion provenance (8.3.1) for poisoning, the eval harness (8.5.1) for held-out checks after every fine-tune. |
+| **Operations** | Memorization testing is cheap and almost never run by default — put it in the fine-tuning pipeline as a required CI gate, not an optional audit. |
+| **Cost** | Extraction is a slow-burn cost/IP risk, not an incident-response one — detection is about noticing a pattern over weeks, not an alert firing in real time. |
+| **Security** | A managed API narrows but does not eliminate this surface — extraction and inversion both operate purely through normal-looking API calls, which is exactly why they're missed. |
+| **Decision** | Any model you fine-tune on your own data inherits poisoning and inversion risk proportional to how sensitive that data is — treat a fine-tuning dataset with the same classification discipline as the data itself (8.6.7). |
+
+### 9. Trade-offs & failure modes
+
+- **Assuming a managed, closed-weight API can't be extracted.** The attack surface is smaller
+  than self-hosting, but the API itself is the oracle — it is not zero.
+- **Treating "data poisoning" as a RAG-corpus-only concern.** Fine-tuning data is exposed the
+  same way, and often reviewed with far less scrutiny than the production RAG pipeline.
+- **Never testing for memorization because "we used a reputable provider."** The provider's
+  general safety testing does not know what sensitive data *you* fine-tuned in.
+- **Confusing adversarial examples with prompt injection.** They exploit different mechanisms
+  (learned decision boundary vs instruction-following) and need different defenses — treating
+  one as a subset of the other leaves a gap.
+- **Skipping model-level risk in the AI register (8.6.9).** Vendor and governance review
+  routinely covers application-layer risk and forgets to ask "what happens if this specific
+  model is extracted, poisoned, or induced to leak its training data?"
 
 ---
 

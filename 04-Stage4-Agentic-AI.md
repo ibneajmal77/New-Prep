@@ -936,6 +936,7 @@ The useful way to compare orchestrators is by altitude:
 | Graph orchestration | LangGraph | Constrained agents with checkpoints and interrupts | Graph design becomes the product |
 | Enterprise SDK | Semantic Kernel agents | .NET / Microsoft estates, plugins, planners | Keep business authorization outside the planner |
 | Multi-agent frameworks | AutoGen, CrewAI | Research, prototypes, specialist handoffs | Cost and nondeterminism rise fast |
+| Lightweight agent framework | Smol Agents (Hugging Face) | Quick prototypes, minimal dependencies | Fewer production guardrails than the above — evaluate before shipping |
 | Managed agent platform | Azure AI Foundry Agent Service | Managed tool/runtime integration | Verify preview/GA status, regions, limits |
 | Durable workflow | Durable Functions, Temporal | Long-running approval workflows | Better for deterministic flows than free agents |
 
@@ -1045,7 +1046,7 @@ def route_orchestrator(task):
 | Managed Microsoft agent runtime | Azure AI Foundry Agent Service |
 | Long-running durable business process | Azure Durable Functions, Temporal |
 | Business approval flow | Power Automate approvals, Logic Apps |
-| Multi-agent experimentation | AutoGen, CrewAI |
+| Multi-agent experimentation | AutoGen, CrewAI, Smol Agents |
 
 ### Fails when
 
@@ -1889,6 +1890,7 @@ a simple workflow sound advanced.
 | Handoff | Agent A transfers to Agent B | A clear domain boundary is reached |
 | Debate/review | One agent drafts, another critiques | High-stakes analysis, not routine execution |
 | Planner/executor | Planner writes plan, executors perform steps | Complex tasks with inspectable plans |
+| DAG / graph agent | Tasks are nodes in a dependency graph, executed respecting dependencies — independent branches can run in parallel | Workflows with real parallelism or branching, not a strictly linear plan |
 
 ### Scenario
 
@@ -2032,6 +2034,64 @@ and a design that relies on the MCP layer alone has moved enforcement to the wro
 - Remote MCP auth is weaker than the underlying enterprise API — the protocol becomes the
   weakest link rather than a neutral pipe.
 - A resource returns malicious prompt text and the host treats it as instructions (8.4.9).
+
+---
+
+## 8.4.10 A2A — Agent2Agent protocol `+`
+> **In the build:** Stage 4, Step 10 (companion) — MCP standardises how *one* agent reaches
+> tools and data. A2A standardises how *two agents* — often owned by different teams or
+> different vendors — talk to each other.
+
+### Definition
+
+A2A is a protocol for agent-to-agent communication: one agent (a client) discovers another
+agent's capabilities via a published **Agent Card**, then sends it a task and receives results —
+without either side needing to know the other's internal framework, prompts, or model. Where MCP
+(8.4.7) connects an agent *down* to tools and data, A2A connects an agent *sideways* to another
+autonomous agent that may be built, hosted, and operated by a completely different team.
+
+### The pieces
+
+| Piece | Meaning |
+|---|---|
+| Agent Card | A published capability manifest — what this agent can do, how to reach it, what auth it needs |
+| Client agent | The agent initiating a task on another agent's behalf |
+| Remote agent | The agent receiving and executing the task |
+| Task | A unit of work sent to the remote agent, with an ID, that can be long-running |
+| Artifact | A result the remote agent produces and returns |
+
+### Scenario
+
+The HR assistant needs a travel itinerary drafted for a relocating employee. Rather than
+building travel-booking tools itself, it sends the task to a separately-owned **Travel agent**
+via A2A — discovering its Agent Card, submitting the task, and polling for the artifact. The HR
+assistant never learns what framework the Travel agent runs on, and the Travel agent never
+learns anything about HR's internal tools. This is the same boundary MCP draws around a *tool*,
+drawn instead around a whole *agent*.
+
+### Where it fits
+
+```
+   MCP:  agent host → MCP client → MCP server → enterprise API      (agent → TOOL)
+   A2A:  agent host → A2A client → remote Agent Card → remote agent (agent → AGENT)
+```
+
+A2A does not replace tool permission scoping (8.6.5) or approval gates (8.4.4) — a task sent to
+a remote agent is still an action the harness must authorize, budget-cap and audit, exactly like
+a tool call. The remote agent is simply opaque in a way a tool is not: you cannot inspect its
+reasoning, only its declared capabilities and its returned artifact.
+
+### Fails when
+
+- The remote agent is trusted as if it were an internal tool, with no permission scoping or cost
+  cap on tasks sent to it (8.6.5, 8.4.8).
+- A returned artifact is inserted into context without the same untrusted-content treatment given
+  to any other tool result (8.6.2, 8.6.4) — a compromised or malicious remote agent is an
+  indirect-injection vector like any other.
+- Agent Cards are trusted without verifying the endpoint, the same way an MCP server allowlist
+  exists precisely because "a developer connected it" is not authorization (8.4.7).
+- This is treated as a mature, universally-adopted standard rather than an emerging one —
+  *verify* current adoption and stability before committing production architecture to it.
 
 ---
 

@@ -301,10 +301,24 @@ model more computation before it commits. Three ways to elicit it:
 - *Structured CoT* — a schema with a `reasoning` field before the `answer` field, which is the
   most controllable, since the reasoning becomes a first-class, loggable output
 
+> *Plain English:* the model writes one word at a time and can only "think" for the instant it
+> takes to produce that word — there's no hidden scratch space. Answering immediately forces the
+> whole calculation into that one instant. Writing the steps out first gives it scratch paper:
+> each line it writes becomes something it can read back before writing the next, so the total
+> computation spent on the problem scales with how much it writes, not just with the final answer.
+
 ⚠ **Two important caveats.** On **reasoning models** (8.1.9), CoT prompting is redundant and can
 degrade quality — they already do it internally. And the stated reasoning is not guaranteed to
 be the *actual* cause of the answer; it is a plausible explanation, which matters when you are
 tempted to present it as an audit trail (see 8.7.9 for what real explainability requires).
+
+> *Plain English on the caveats:* (1) some newer models already think silently before replying,
+> so telling them to "think step by step" on top of that just adds noise — save this technique
+> for models that don't already reason internally. (2) The steps the model shows you are a
+> plausible-sounding story, not a verified record of what actually happened inside it — it may
+> already have "known" the answer and back-filled steps that lead to it, the way a student writes
+> a fake derivation for an answer they copied. Right answer, invented reasoning — don't treat it
+> as proof of how the decision was made.
 
 **ReAct.** A loop, not a prompt: think → act → observe → repeat, until an answer. The prompt
 format teaches the model to emit those labelled steps; your code parses them, executes the
@@ -325,6 +339,15 @@ flowchart LR
 model that *knows* something reproduces it, while a model guessing guesses differently each time
 — which is exactly the hallucination detector from 8.1.7. Cost is linear in N, so reserve it for
 high-stakes answers. `n=5` in one request bills the input once (8.1.2).
+
+> *Plain English:* ask the same question several times with some randomness turned on. If the
+> model actually knows the answer, that knowledge is a sharp, confident peak in its predictions,
+> so randomness barely moves it and you get the same answer back each time. If it's guessing —
+> no real anchor underneath — randomness scatters the guesses in different directions each time.
+> So agreement across samples becomes a free confidence signal: 5/5 identical answers means it's
+> likely real, 2/5 means it's likely fabricated. You pay for this in output tokens (you're
+> generating N full answers), but the input/prompt itself is only billed once per request, not
+> N times — that's what `n=5` in a single API call buys you.
 
 ### 5. Where it fits
 
@@ -1175,6 +1198,150 @@ meaningful comparison and an evaluation harness to judge with (8.5.1).
 - Randomising per *request* rather than per *user*, so a single user sees inconsistent behaviour
   within one conversation.
 - Frequent prompt edits silently destroying the cache prefix (8.2.5).
+
+---
+
+## 8.2.7 Advanced prompting & reliability — Tree-of-Thought, step-back, automatic prompt engineering, calibration `+`
+> **In the build:** Stage 2, Steps 2–3 (companion) — 8.2.2 covers the four techniques nearly
+> every production system needs. These show up once one reasoning pass, or one sampled answer,
+> stops being enough.
+
+### Tree-of-Thought (ToT) prompting
+
+**Definition** — Chain-of-thought commits to one reasoning path, token by token. Tree-of-Thought
+explores *several* candidate next steps as a branching search: generate multiple continuations,
+score or self-evaluate each, keep the promising branches, discard or backtrack from the rest, and
+continue until one branch reaches an answer. It is CoT plus search, not a single-prompt trick —
+it's implemented as multiple coordinated calls.
+
+**Example** — a leave-policy edge case with three plausible interpretations: the model generates
+all three as separate branches, scores each against the actual policy text, discards two, and
+only continues reasoning from the surviving branch rather than committing to the first
+interpretation it produced.
+
+**Where it fits / Library** — application-level orchestration, not a prompt parameter: LangGraph
+or a custom loop that generates candidates, scores them (often with a second LLM call acting as
+judge), and prunes.
+
+**Used when** — the problem has multiple genuinely plausible solution paths and being wrong is
+expensive enough to justify several times the cost and latency of plain CoT — multi-step policy
+interpretation, planning tasks, puzzle-like reasoning.
+
+**Fails when** — used on simple lookups, where it's pure overhead with nothing to branch on; no
+real scoring function exists for branches, so the "search" just multiplies cost without improving
+answers; confused with self-consistency (8.2.2) — self-consistency resamples the *same* prompt
+independently and votes, ToT explores *different* reasoning branches within one problem and prunes
+as it goes. Different mechanism, different cost shape, don't budget them the same way.
+
+### Step-back prompting
+
+**Definition** — Before answering a specific question, first ask the model a more general,
+abstracted version of it, then feed that general answer back in as grounding context for the
+specific question. Two calls: "what's the general principle here?", then "given that principle,
+answer the specific case."
+
+**Example**
+```
+❌ Direct: "Can an employee who joined in March and transferred departments in July
+            combine annual and compassionate leave into one 20-day block?"
+   → the model pattern-matches on surface details and may miss an applicable general rule.
+
+✅ Step-back:
+   Step 1: "What are the general rules governing combining different leave types?"
+   Step 2: "Given those rules: [specific case]. Combine annual and compassionate leave here?"
+```
+
+**Where it fits / Library** — same layer as CoT (8.2.2), a two-call pattern. The "general
+principle" step is often stable across many specific questions in the same domain, which makes it
+a good candidate for its own cache-friendly prefix (8.2.5).
+
+**Used when** — specific questions are drawn from a smaller number of general principles, and
+answering directly tends to miss the applicable one.
+
+**Fails when** — the abstraction step is skipped over shallowly (the model restates the question
+instead of genuinely generalizing, so step 2 gets nothing useful); applied to lookups that have
+no real "general principle" behind them, where it's pure overhead.
+
+### Automatic prompt engineering (APE) / meta-prompting
+
+**Definition** — Using an LLM to write, critique, or optimize prompts for another (or the same)
+LLM, instead of a human hand-tuning wording by feel. The standard loop: generate N candidate
+instruction phrasings for a task, score each against a labeled example set, keep the winner,
+optionally repeat.
+
+**Example**
+```python
+candidates = generate_instruction_variants(task_description, n=8)   # LLM writes candidates
+scored = [(c, evaluate_against_golden_set(c, golden_set)) for c in candidates]  # 8.5.1
+best_prompt = max(scored, key=lambda x: x[1])[0]
+```
+
+**Where it fits** — sits between prompt management (8.2.3, where the winner gets versioned) and
+the evaluation harness (8.5.1) — APE without a golden set to score candidates against is just
+generating variety, not improving anything.
+
+**Library** — DSPy for structured prompt optimization, `promptfoo` for eval-driven comparison, or
+a manual loop against your own golden set.
+
+**Used when** — you already have a labeled eval set and want to search prompt-wording space
+faster than manual iteration, especially for a narrow, well-defined task like classification or
+extraction.
+
+**Fails when** — no eval set exists, so there's nothing to optimize against; the optimized prompt
+overfits to the golden set the same way any optimization can overfit — hold out a validation slice
+it never sees during search; treated as "set and forget" — a model version change can silently
+invalidate a previously-optimized prompt, so it needs the same re-test-on-change discipline as
+any other prompt (8.2.3).
+
+### Improving reliability — debiasing, ensembling, self-evaluation, calibration
+
+These four operate *after* an answer already exists, to decide how much to trust it or improve
+it further — a different moment in the pipeline from the techniques above, which shape how the
+answer gets generated in the first place.
+
+- **Prompt debiasing** — vary surface properties that shouldn't affect the answer (option order
+  in a multiple-choice prompt, few-shot example order, phrasing) and check whether the answer
+  changes. If it does, the model is anchoring on position or framing rather than content — e.g. a
+  classifier that quietly favours "option A" regardless of what A actually says. Run this once
+  per prompt at authoring time, as a pre-release check (8.5.1), and again after any prompt edit.
+- **Prompt ensembling** — run several *differently worded* prompts for the same task (not the
+  same prompt resampled, which is self-consistency, 8.2.2) and combine the answers. This catches
+  a badly-worded prompt, not just an uncertain model — a failure mode self-consistency cannot see,
+  since resampling one flawed prompt just agrees with itself.
+- **LLM self-evaluation** — ask the model, or a second model, to critique its own prior answer
+  against explicit criteria (a rubric: are all required fields present, is every claim cited,
+  does it violate a policy) before the answer is returned or logged. One extra call rather than N,
+  and it catches rubric violations that sampling agreement doesn't.
+- **Calibrating LLMs** — check whether the model's *stated* confidence (a number it's asked to
+  report, or the token probability from 8.1.2) actually matches its *empirical* accuracy: among
+  every answer where it claimed "90% confident," is it right about 90% of the time? Raw stated
+  confidence from an LLM is usually overconfident out of the box. Calibration means measuring this
+  on a labeled set and either correcting it or replacing it with a better-behaved signal —
+  self-consistency agreement (8.2.2) or answer-span token probability (8.1.2) both calibrate
+  better in practice than a model just asserting a number.
+
+**Where it fits** — the same VALIDATION & RETRY slot self-consistency occupies in 8.2.2's
+pipeline diagram, feeding Stage 6's evaluation harness (8.5.1): debiasing and ensembling as
+offline regression checks against the golden set, self-evaluation and calibration as runtime
+signals attached to individual responses.
+
+**Library** — mostly evaluation-harness patterns (8.5.1) rather than a dedicated package;
+`sklearn.calibration.calibration_curve` or a manual reliability diagram for measuring calibration
+empirically against logged outcomes.
+
+**Used when** — debiasing: always, once per prompt, and again after every edit. Ensembling:
+high-stakes decisions where prompt-wording risk matters, typically layered *with* self-consistency
+rather than instead of it. Self-evaluation: any answer with hard requirements — citations, format,
+policy compliance — worth a cheap second pass. Calibration: anywhere a confidence number is shown
+to a human or used to gate an automated action (auto-approve vs escalate, 8.2.2's self-consistency
+example).
+
+**Fails when** — debiasing is run once at launch and never re-run after a prompt edit; ensembling
+is budgeted like self-consistency, when it is actually N times the *latency* as well as the cost,
+because genuinely different prompts can't share one batched call the way resampling can; self-
+evaluation is implemented as literally re-asking "are you sure?" with no rubric, which mostly just
+returns "yes"; calibration is assumed rather than measured, and an unverified confidence number
+gets wired straight into an auto-approval threshold.
 
 ---
 
