@@ -1,5 +1,7 @@
 # Stage 5 - AI Guardrails & AI Security (8.6)
 
+**Rules status:** legacy v1 shape, migration debt tracked in §8
+
 *Three parts: **Part A** is the build narrative. **Part B** is the complete reference — every
 fact for a topic lives there, in full, once. **Part C** assembles it into a revision-ready
 whole. This stage comes before telemetry because you cannot measure safety until you know what
@@ -132,7 +134,7 @@ approval, ownership, model/vendor review, a live AI register and a responsible A
 attacked, and the control that stops each one.
 
 **Precisely:** OWASP's LLM and GenAI risk lists are **threat taxonomies for applications**, not
-for models. The labels and numbering shift by version — *verify* the current official list
+for models. The labels and numbering shift by version — `verify` the current official list
 before a panel. **The examinable skill is not reciting the list; it is mapping each risk to a
 concrete control in your own architecture.**
 
@@ -229,7 +231,7 @@ There are no tunable parameters here — this is a taxonomy. What varies is **co
 | Risks with a named owning control | **10 of 10** | Any gap is the answer to "what can go wrong?" |
 | Risks with a *detective* control, not just preventive | ≥ 8 of 10 | Prevention you cannot observe is prevention you cannot prove |
 | Risks covered by red-team cases in CI | ≥ 7 of 10 (`typical` starting point) | Injection, disclosure, agency and output handling first |
-| Review cadence | quarterly, or on any architecture change | The list itself changes — *verify* the current version |
+| Review cadence | quarterly, or on any architecture change | The list itself changes — `verify` the current version |
 
 ### 8. Perspectives grid
 
@@ -545,7 +547,7 @@ tool responses and model output into risk categories, applying thresholds and ac
 category. In Azure this usually means model guardrails plus Azure AI Content Safety —
 harm-category detection, **Prompt Shields**, groundedness detection, protected-material
 detection, custom categories and blocklists. **Availability, language support and preview/GA
-status change: *verify* for the target region.**
+status change: `verify` for the target region.**
 
 ### 2. Scenario
 
@@ -1402,7 +1404,7 @@ index** to whatever endpoint you configured.
 | Identity, no keys | Managed identity + Entra ID; Key Vault for anything remaining |
 | Private networking | Private endpoints, VNet integration, egress firewall rules |
 | Redaction | Azure AI Language PII detection, Presidio — applied before the call and before the log |
-| Residency | Regional or data-zone deployment types; *verify* what your deployment type actually guarantees |
+| Residency | Regional or data-zone deployment types; `verify` what your deployment type actually guarantees |
 | Deletion | An erasure routine that walks index, vectors, caches, traces, history and eval sets (8.3.9) |
 | Evidence | Provider documentation and contractual terms — `verify`, and keep the record |
 
@@ -1410,7 +1412,7 @@ index** to whatever endpoint you configured.
 
 | Knob | Typical | Notes |
 |---|---|---|
-| Deployment type | regional or data-zone where residency is a constraint | Global capacity may process elsewhere — *verify* |
+| Deployment type | regional or data-zone where residency is a constraint | Global capacity may process elsewhere — `verify` |
 | Training on tenant data | contractually off | Get it in writing; it is a procurement artifact |
 | Redaction point | before the model call, before logs, before eval sets | Three separate places, all required |
 | Telemetry region | same geography as the application | The classic leak: app is private, telemetry exports out |
@@ -1725,7 +1727,7 @@ software with a completely different risk profile, and the approval no longer co
 | Risk tiers | 3–4 (low / medium / high / prohibited) | Aligned to your regulator's language where one applies |
 | Register completeness | 100% of production AI systems | A system not in the register is a finding by definition |
 | Evaluation evidence required before approval | golden set + red-team pass rate | Not "it demoed well" |
-| Deprecation lead time | provider-dependent — *verify* | Plan the migration before the notice arrives |
+| Deprecation lead time | provider-dependent — `verify` | Plan the migration before the notice arrives |
 
 ### 8. Perspectives grid
 
@@ -2216,7 +2218,7 @@ bullet form, so this one section is enough to revise from.
 #### 8.6.1 — OWASP Top 10 for LLM Applications `[CORE]`
 
 - **What it is:** a threat taxonomy **for applications**, not for models. Labels and numbering
-  shift by version — *verify* the current list. **The examinable skill is mapping each risk to a
+  shift by version — `verify` the current list. **The examinable skill is mapping each risk to a
   concrete control in your own architecture.**
 - **Why these risks exist:** natural language crosses boundaries ordinary software keeps
   separate — instructions and data are both text · retrieved documents become prompt content ·
@@ -2318,7 +2320,7 @@ bullet form, so this one section is enough to revise from.
   content, proposed tool calls, tool responses and model output. In Azure: model guardrails plus
   Content Safety — harm categories, **Prompt Shields**, groundedness detection, protected-material
   detection, custom categories, blocklists. **Availability, language support and preview/GA status
-  change — *verify* for the target region.**
+  change — `verify` for the target region.**
 - **Five intervention points, each because something different enters there:**
   | Point | Scan for | Action |
   |---|---|---|
@@ -2336,7 +2338,7 @@ bullet form, so this one section is enough to revise from.
   employee personal data → redact / require auth / block · prompt injection → warn-strip / block
   or human review / **block and alert** · protected material → summarize within policy / block
   long reproduction / block.
-- **Knobs (`typical`):** 4 severity levels (*verify*) · low → log, medium → route, high → block ·
+- **Knobs (`typical`):** 4 severity levels (`verify`) · low → log, medium → route, high → block ·
   false-positive review SLA same business day for user-facing blocks · **every production language
   tested** · filter metadata always logged · policy version pinned like a prompt.
 - **Failure modes:** filters treated as the whole security system · preview features assumed

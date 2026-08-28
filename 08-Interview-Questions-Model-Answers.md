@@ -234,7 +234,7 @@ residency - rules out managed cloud APIs entirely; otherwise a managed platform 
 cheaper and less operational burden.
 
 **Q: What are reasoning models, and why can they surprise you on cost?**
-- **Answer:** A reasoning model may spend extra hidden reasoning tokens before producing the final answer. Those hidden tokens can be billed as output, so visible token logs can dramatically understate real cost (200 visible output tokens but 3,200 hidden reasoning tokens is a real example - about 22x the cost of a similar non-reasoning call). Use them only for genuinely hard multi-step problems, not as a default - they are also much slower, a bad fit for interactive chat.
+- **Answer:** A reasoning model may spend extra hidden reasoning tokens before producing the final answer. Those hidden tokens can be billed as output, so visible token logs can dramatically understate real cost. Keep the three multipliers apart, because interviewers push on exactly this: on the worked example (200 visible output tokens, 3,200 hidden, against a standard model's 150), the **output-token ratio is about 22x**, the **fully-loaded call costs about 10x** the standard model, and a **dashboard that counts only visible tokens understates the bill by about 9x**. The last one is the number that matters operationally, because it is the error in your own telemetry. Use reasoning models only for genuinely hard multi-step problems, not as a default - they are also much slower, a bad fit for interactive chat.
 
 **Q: What is streaming, and when should you use it?**
 - **Answer:** Streaming sends the model's output token-by-token as it's generated instead of waiting for
@@ -382,7 +382,7 @@ best fix for the size trade-off is parent-child retrieval: search over small pre
 but send the model the larger parent section that contains them.
 - **Remember:** the chunk is the atomic unit of retrieval - nothing downstream can ever recover
 information that got cut in half at this step.
-- **Watch out:** the single most common silent failure is splitting a table - "Grade A 22, Grade B 30,
+- **Watch out:** the single most common silent failure is splitting a table - "Grade A 24, Grade B 30,
 Grade C 35" flattens into meaningless numbers with no labels attached. Never split a table. Also,
 chunking changes require a full re-index, so get metadata (ACLs, dates, section, page) right the
 first time.
@@ -537,8 +537,10 @@ queries at search time - normalizing only one side is worse than normalizing nei
 - **Answer:** Retrieval caching reuses previous retrieval or generation results to cut latency and cost,
 useful because a small number of questions get asked over and over. Three layers of increasing
 risk: caching the query embedding (safe), caching the final answer keyed by question + permission
-scope (moderate - must include the user's permission group in the cache key or you leak one user's
-answer to another), and semantic caching (serving a cached answer to a "close enough" question -
+class (moderate - omit the permission part and you leak one user's answer to another; but keying on
+the user's *full* principal set collapses the hit rate, because real principal sets carry device and
+role groups and are near-unique, so key on the intersection with the groups that actually appear on
+document ACLs), and semantic caching (serving a cached answer to a "close enough" question -
 highest risk, since "can I carry over leave?" and "can I carry over sick leave?" can look
 deceptively similar to a too-loose similarity threshold).
 

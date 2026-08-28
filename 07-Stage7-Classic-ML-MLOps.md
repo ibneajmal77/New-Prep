@@ -1,5 +1,7 @@
 # Stage 7 - Classic ML & MLOps (8.7)
 
+**Rules status:** legacy v1 shape, migration debt tracked in §8
+
 *Three parts: **Part A** is the build narrative. **Part B** is the complete reference — every
 fact for a topic lives there, in full, once. **Part C** assembles it into a revision-ready
 whole. This stage covers the half of the job that is not generative: prediction, scoring and

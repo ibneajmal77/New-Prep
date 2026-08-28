@@ -1,0 +1,4 @@
+# Governance tooling artifacts — see 00-Authoring-Rules.md §8
+__pycache__/
+*.pyc
+stage_conformance_check_output.md

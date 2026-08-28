@@ -1,5 +1,7 @@
 # Stage 6 - LLMOps, Evaluation & Telemetry (8.5)
 
+**Rules status:** legacy v1 shape, migration debt tracked in §8
+
 *Three parts: **Part A** is the build narrative. **Part B** is the complete reference — every
 fact for a topic lives there, in full, once. **Part C** assembles it into a revision-ready
 whole. Stage 5 defined the controls; Stage 6 proves whether the system is actually working,
@@ -890,7 +892,7 @@ so cost per *failed* task is a real unit-economics number, not an accounting cur
 | Cache hit ratio | 70–95% well-structured | **Alert below ~0.5** — a broken cache is silent |
 | Agent vs single answer | **10–50×** | The number to quote before "make everything an agent" |
 | Model tier gap | ~15× small vs frontier | The largest single cost lever (8.1.3) |
-| Cached-token discount | 50–90% (*verify*) | Input only — output is never cached |
+| Cached-token discount | 50–90% (`verify`) | Input only — output is never cached |
 | Reasoning tokens | can be 1,000–20,000+ on hard prompts | Bill can land ~20× above visible tokens |
 | Budget scope | per tenant **and** per feature | Per-subscription budgets do not localise a spike |
 | Alert on cost/request | doubling | Usually a model route or context regression |
@@ -1413,7 +1415,7 @@ while each application still owns its own prompt, retrieval and agent-specific c
 
 **Library** — Azure API Management with its AI gateway capabilities (token metering, semantic
 caching, load balancing across deployments); `LiteLLM` proxy; Portkey; Kong AI Gateway. All solve
-the same problem at different levels of managed-ness — *verify* current feature parity before
+the same problem at different levels of managed-ness — `verify` current feature parity before
 choosing.
 
 **Used when** — more than one GenAI application exists, or will soon; especially wherever cost
@@ -1746,7 +1748,7 @@ so this one section is enough to revise from.
   nightly · embedding bill high → incremental sync and content hashes · tenant spike → per-tenant
   quotas.
 - **Knobs (`typical`):** cache hit ratio 70–95%, **alert below ~0.5** · agent 10–50× a single
-  answer · tier gap ~15× · cached-token discount 50–90% (*verify*) · reasoning tokens can be
+  answer · tier gap ~15× · cached-token discount 50–90% (`verify`) · reasoning tokens can be
   1,000–20,000+ · **budgets per tenant and per feature**.
 - **Failure modes:** only the monthly invoice monitored · **cached tokens untracked, so broken
   caching is invisible** · reasoning tokens omitted · agent cost counted as one call · budgets per

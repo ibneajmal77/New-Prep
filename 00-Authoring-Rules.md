@@ -1,13 +1,29 @@
 # Authoring Rules — how every Stage file gets written or upgraded
 
+**Rules version:** v2.0 (2026-08-28)  
+**Reference example:** `02-Stage2-Prompt-Context-Engineering.md` after its Stage 2 rewrite.
+
 *Companion to `00-MAP.md`. The Map is the index and the tier list — read it to know **what**
 belongs where. This file is the production spec — read it to know **how** to write or upgrade
-any section so it matches the standard Stage 1 was built to, including the completeness bar
-established after Stage 1's Part C was rewritten for real interview-cram use.*
+any section so it matches the current stage-file standard.*
 
-Apply this file to **every** stage (`02` through `07`), not just new material. Where an existing
-section falls short of a rule here — most visibly, every Part C written before this file existed
-— that section is a rule violation to fix, not a different acceptable style.
+Stage 2 (`02-Stage2-Prompt-Context-Engineering.md`) is now the reference example for the format.
+Do not copy Stage 2's topic content into other stages. Extract its teaching pattern and apply it
+to each stage's own topics: beginner-simple explanation first, exact examples next, practical
+implementation inside the relevant concept, then senior production metrics, tools, trade-offs and
+failure modes.
+
+Apply this file to **every stage file** (`01` through `07`) when it is newly written or migrated.
+Where an existing stage falls short of v2.0, record that as migration debt in §8 instead of
+pretending it already conforms. The non-stage files (`08`, `10`–`18`, `30`–`36`, `40`–`41`) are
+not governed by this spec unless they explicitly opt into it. Repo-root tooling files such as
+`stage_conformance_check.py` are governance tooling, not curriculum content.
+
+`08-Interview-Questions-Model-Answers.md` is a deliberate exception worth naming: it restates
+stage facts but carries no `[8.x.y]` tags and no rules-status line, so nothing links a corrected
+stage number back to it and no checker can reach it. Treat it as an **untracked derivative** —
+when a stage fact changes, grep `08` for the same claim by hand in the same change, or give it
+`[8.x.y]` tags and opt it into this spec.
 
 ---
 
@@ -20,7 +36,7 @@ instead of content) was tried first and failed.
 
 ---
 
-## 1. The four-part contract every stage file follows
+## 1. The three-part contract every stage file follows
 
 ```
 Stage N file
@@ -30,20 +46,67 @@ Stage N file
 └─ Part C  — ASSEMBLED           the whole stage recombined, revision-ready
 ```
 
+Every stage file also carries a short rules-status line near the top:
+
+Legal values:
+
+- `v2.0 reference`
+- `v2.0 migrated`
+- `legacy v1 shape, migration debt tracked in §8`
+
 - **Part A** exists to motivate. It never teaches a mechanism in depth — it raises a problem and
   points at the Part B entry that solves it.
 - **Part B** exists to teach. Every fact, number, table and failure mode for a topic lives here,
   in full, once.
-- **Part C** exists to *compress Part B back down* without losing anything — one continuous
-  trace, one comparison table, one handoff, one self-test. Part C is not a summary in the sense
-  of "shorter and less detailed." It is shorter in *narrative* and undiminished in *fact*.
+- **Part C** exists to *compress Part B back down* without losing the facts that matter for
+  revision — one continuous trace, one comparison table, one handoff, one self-test. Part C is not
+  a weak summary. It is shorter in *narrative* and undiminished in *fact* as defined by §4's
+  compression contract.
 
-Only Stage 1 (`01-...md`) carries the file-format front matter (how to read this file, the
-master diagram, the library map, the glossary) — those live once, globally, and Stage 1 doubles
-as the place readers land first. Stage 2 onward skip straight to Part A, opening instead with a
-short **"Where we are"** paragraph: one sentence on what the previous stage finished, one on the
-problem this stage exists to solve. Never re-explain the master diagram or glossary per file —
-point back at Stage 1's `A2`/`A4` instead.
+Only Stage 1 (`01-...md`) carries global curriculum front matter such as how to read the files,
+the master diagram, the library map, and the glossary. Stage 2 onward skip straight to Part A,
+opening instead with a short **"Where we are"** paragraph: one sentence on what the previous stage
+finished, one on the problem this stage exists to solve. Never re-explain the master diagram or
+glossary per file; point back to the named Stage 1 sections instead of ambiguous shorthand like
+`A2`.
+
+### 1.1 Required skeleton
+
+Use this skeleton unless a stage-status line says the file is still legacy debt:
+
+```markdown
+# Stage N — Stage Title (8.x)
+
+**Rules status:** v2.0 migrated
+**Where we are:** ...
+
+# Part A — THE BUILD: Stage N
+
+*Order note, when numeric order is not build order: ...*
+
+## Step 1. Concrete symptom in plain words
+
+> **→ [8.x.y Topic](#anchor-to-topic)**
+
+# Part B — THE REFERENCE
+
+## 8.x.y Topic title `[CORE]`
+
+> **In the build:** Stage N, Step M — "the quoted symptom"
+
+### 1. Simple idea
+
+...
+
+# Part C — Stage N assembled
+```
+
+Topic tags may have any valid depth from the map, such as `[8.3.1.4]` or `[8.6.15]`, not only
+three-level tags. `+` additions keep the plus marker in both `00-MAP.md` and the topic heading.
+Heading level follows role and nesting, not only number depth: CORE topics and standalone topic
+cards usually use `##`; nested WORKING/AWARENESS subtopics inside a parent topic usually use `###`.
+Part A still closes with an **End of Stage N** paragraph, and CORE entries still close before the
+next topic.
 
 ---
 
@@ -68,160 +131,286 @@ point back at Stage 1's `A2`/`A4` instead.
 
 ## 3. Part B — the reference entries
 
-Two card shapes, chosen by tier (tiers come from `00-MAP.md` §4 — CORE / WORKING / AWARENESS).
-**Do not blend them**: a WORKING topic does not get a Perspectives grid; a CORE topic never gets
-compressed to six fields just because it feels simple to write.
+Tiers come from `00-MAP.md` §4: CORE / WORKING / AWARENESS / ADVANCED. Tier controls expected
+depth, but topic type controls shape. A protocol, a lifecycle, a quantifiable mechanism, and a
+governance framework should not be forced into identical headings. The non-negotiable coverage
+set is §3.1's nine perspectives; use that list rather than maintaining a second copy here.
 
-### 3.1 CORE topics — the nine-block card
+Do not pad WORKING or AWARENESS topics into fake CORE entries. Do not compress CORE topics so far
+that a reader cannot implement or defend them.
 
-Every CORE entry, in this exact order, with this exact intent per block:
+### 3.1 CORE topics — the generalized Stage 2 card
 
-1. **Definition** — lead with an ASCII box diagram where the mechanism has real internal
-   structure (a pipeline, a decision, a transformation). The rule from Stage 1: *"the picture is
-   the definition — every arrow carries the full meaning of the term it introduces."* Follow the
-   diagram with two short paragraphs: **Plain English** (one sentence, no jargon) then
-   **Precisely** (the technical formulation, referencing the diagram's boxes by name). If a topic
-   genuinely has no internal mechanism worth diagramming (rare for CORE), a comparison table may
-   substitute — never skip straight to prose.
-2. **Scenario** — a concrete situation *from the running build* that makes the topic necessary.
-   Never a generic "imagine you want to..." — it must be traceable to a Part A step.
-3. **Example** — real, specific values. Real sentences, real token counts, real dollar amounts,
-   real error messages. An example with a placeholder like `<value>` or `some text here` is not
-   done.
-4. **How it works** — the mechanism, taken apart far enough that a reader could reason about a
-   *new* situation, not just recognise this one. This is where nested ASCII diagrams, worked
-   maths (e.g. LoRA's rank arithmetic), and step-by-step gate sequences belong.
-5. **Where it fits** — redraw the master pipeline vertically, mark the current box with
-   `▶ THIS BOX ◀ you are here`, and annotate the boxes immediately before/after with what this
-   topic changes about them.
-6. **Libraries & code** — a table (Python / .NET / JavaScript columns, Python primary) naming
-   the *exact* library for each sub-job, then one code block. Code is written to be **read, not
-   run**: every non-obvious line gets an inline comment explaining *why*, never restating *what*
-   the syntax does. Show at least one failure path being handled (a retry, a truncation check, a
-   429), not just the golden path.
-7. **Knobs & real numbers** — a table of settings/parameters with ranges, defaults, and the
-   situation each value is right for. Anything price-, quota- or region-shaped gets a *verify*
-   flag per the honesty rule below; anything else stated as a number is either a documented
-   default (say so) or a "typical" value (say so) — never bare, unlabelled.
-8. **Perspectives grid** — exactly these six rows, always, in this order: **Theory · Engineering
-   · Operations · Cost · Security · Decision.** One or two sentences each. "Decision" must end in
-   an actionable rule ("use X when Y"), not a restatement of the trade-off.
-9. **Trade-offs & failure modes** — a bullet list, each bullet naming a *specific* wrong setup
-   and its *specific* symptom (not "can be misused"). This list is the raw material `C4`'s
-   self-test questions get built from — write it expecting that reuse.
+Every CORE entry uses the Stage 2 teaching pattern. The exact heading names may change when the
+topic naturally needs sub-concepts, but the entry must cover every perspective below.
+
+1. **Simple idea**
+   - Explain the concept for a strong web developer who is new to GenAI.
+   - Start with plain words before technical terms.
+
+2. **Why it exists**
+   - Tie the concept to a concrete symptom from the running build.
+   - Show what breaks, becomes expensive, becomes unsafe, or becomes hard to operate without it.
+
+3. **Exact example**
+   - Use real request text, payloads, schemas, token/cost examples, failure messages, tables, or
+     configuration values.
+   - Avoid placeholders like `<value>`, `some text`, or fake generic output.
+
+4. **Where it fits in the system**
+   - Name the owning layer: frontend, API, orchestration layer, model provider, retrieval layer,
+     evaluation pipeline, release process, or operations.
+   - Say what enters that layer, what leaves it, and what this topic changes.
+
+5. **Implementation pattern**
+   - Teach from local app code to production use.
+   - Include Python, .NET/C#, and JavaScript/TypeScript examples where the concept can reasonably
+     be implemented in app code.
+   - Put each language example inside the concept subsection it implements. Do not dump all
+     language examples into a separate appendix.
+   - If two concepts are normally coupled in code, combine them only there and explain the coupling.
+   - If the snippet uses an application wrapper such as `llmClient`, `promptRegistry`, or
+     `extractToolCalls`, say it is an application wrapper unless the code is using an official SDK.
+   - Show at least one relevant runtime failure path where the concept has one: retry, timeout,
+     rate limit, schema validation failure, permission denial, truncation, cache miss, or safe
+     refusal. Do not force a fake failure path into a pure policy/table example.
+
+6. **Practical rules**
+   - Give decision rules a developer can use during implementation.
+   - Prefer "use X when Y" or "avoid X when Y" wording.
+
+7. **Libraries, tools, and cloud ecosystem**
+   - List relevant Python, .NET/C#, and JavaScript/TypeScript libraries.
+   - Include Azure, AWS, Google Cloud, and other major managed services only when they directly
+     support the topic.
+   - For each service or tool, explain where it is used, what it manages, what the application
+     still owns, and what should be logged or measured.
+   - Do not add random tool catalogs. Tool coverage must teach implementation for this topic.
+
+8. **Senior metrics**
+   - Include what a senior engineer would measure: quality, latency, cost, reliability, security,
+     release impact, and operational behavior where relevant.
+   - Metric names alone are not enough; explain what the metric proves or catches.
+   - A six-row Perspectives grid (Theory / Engineering / Operations / Cost / Security / Decision)
+     is optional, not mandatory. Use it when it improves a complex topic; otherwise fold that
+     judgment into practical rules, senior metrics, and failure modes.
+
+9. **Trade-offs and failure modes**
+   - Name the wrong setup and the visible symptom.
+   - Include production consequences such as bad answers, injection risk, cost spikes, latency
+     spikes, cache misses, evaluation blind spots, regressions, or support incidents.
 
 Every CORE entry opens with `> **In the build:** Stage N, Step M — "the quoted symptom"` linking
 back to Part A, and closes at a horizontal rule before the next entry.
 
-### 3.2 WORKING and AWARENESS topics — the six-field card
+### 3.2 WORKING, AWARENESS and ADVANCED topics
 
 ```
-Definition     One line. What it is.
-Example        Concrete, with real values.
-Where it fits  Which layer, at which step — what enters, what leaves.
-Library        The exact library and call. Python primary, .NET/JS named.
-Used when      The situation that makes you reach for it.
-Fails when     The failure mode. Usually the real question an interviewer asks.
+Simple idea          What it is, in plain words.
+Exact example        Concrete, with real values.
+Where it fits        Which layer owns it, what enters, what leaves.
+Implementation note  The exact library, API, service or small code pattern.
+Used when            The situation that makes you reach for it.
+Fails when           The wrong setup and visible symptom.
+Senior note          Metric, release concern, cost/security issue or production limit.
 ```
 
-No ASCII diagram is required, but one is welcome if the topic has real internal structure. Never
-pad a WORKING card to look like a CORE card — the tier signals how much depth to expect, and
-inflating it defeats that signal.
+Never pad a WORKING or AWARENESS card to look like a CORE card. The tier controls depth, not the
+need for clarity.
 
-### 3.3 Two honesty labels, used throughout Part B
+ADVANCED topics are allowed to be longer than WORKING topics when they introduce reliability,
+cost, orchestration or production trade-offs. Treat them like Stage 2's advanced reliability
+section: explain when the technique is worth the extra complexity, show code-shaped examples where
+useful, and separate it clearly from the core path.
+
+### 3.3 Language examples stay with the concept
+
+Language examples must be placed where the reader needs them.
+
+Good:
+
+```text
+Context compaction
+- Python implementation
+- .NET/C# implementation
+- TypeScript implementation
+```
+
+Bad:
+
+```text
+Appendix: all Python examples
+Appendix: all .NET examples
+Appendix: all JavaScript examples
+```
+
+The reader should learn the concept and immediately see how that exact concept is implemented.
+
+### 3.4 Cloud and tool examples must teach implementation
+
+Mention cloud tools, SDKs, libraries and managed services only when they help implement, operate,
+evaluate, secure or release the topic being taught.
+
+For every cloud or managed-service mention, answer:
+
+- What part of the system does it help with?
+- What does the service manage for us?
+- What does our application still own?
+- What would we log or measure in production?
+- What changes if we switch provider?
+
+### 3.5 Number and currency labels, used throughout Part B
+
+The label form is literal and checkable: write labels in backticks as `verify`, `typical`,
+`documented default` or `example`. Plain prose uses of those words are not labels.
 
 - **`verify`** — for anything that changes outside this document's control: prices, quotas,
-  region availability, product names, contractual terms. State the *shape* of the answer, flag
-  it, move on.
+  region availability, product names, SDK method names, model names, service features, cloud
+  availability, contractual terms. State the *shape* of the answer, flag it, move on.
 - **`typical`** — for numbers that are common in practice but not a documented default. Never
-  present a "typical" number as if it were a spec.
+  present a `typical` number as if it were a spec.
+- **`documented default`** — for a number copied from a stable product or library default that
+  does not move between releases. Use `documented default` next to the number so it is checkable.
+  **`verify` wins over `documented default` whenever the owner can change it.** A model provider's
+  temperature default, cache TTL, minimum cacheable prefix or rate limit is a moving product
+  detail, so it takes `typical`, `verify` — not `documented default`. A near-zero
+  `documented default` count in a stage file is therefore normal, not a gap; only flag it when a
+  genuinely stable default is sitting bare.
+- **`example`** — for a value invented only for the running example. Prefer block-level coverage:
+  put example values inside an explicitly labelled `Example`, `Exact example`, `worked example`,
+  or table column named `example`. Use inline `example` only when one invented value appears
+  outside a labelled example block/table and could otherwise be mistaken for a documented default
+  or general recommendation.
+
+Do not label mechanism facts or derived results as `example`. If a number is the mechanism itself
+(`token 1` in prefix matching) or a computed consequence (`0%` when the first token changes every
+request), explain the mechanism or derivation in words instead of pretending the value was invented
+for the running example.
 
 ---
 
-## 4. Part C — assembled (the section this file exists to fix)
+## 4. Part C — assembled
 
-Part C has four fixed subsections, `C1`–`C4`. This is the section most likely to be written thin
-on a first pass — it looks like a summary, so it's tempting to write it like one. It is not a
-summary. Treat each subsection as follows.
+Part C is not a weak summary. It is the stage recombined for revision, interview recall and
+production reasoning. Use the generalized Stage 2 shape below unless a later stage has a clear
+reason to rename a label while preserving the same function.
 
-### C1. One request, end to end — three layers, all required
+Compression contract: Part C must preserve every key number, decision rule, failure mode, metric,
+tool role, and operational consequence. It does not need to repeat full code samples, long prose
+derivations, every library table, or every intermediate explanation from Part B unless the
+self-test depends on that exact detail. This is how Part C can be shorter than Part B while still
+being useful for interview-cram recall.
 
-1. **The compact trace.** A single real request (or the same one Stage 1 used, carried forward
-   with this stage's step inserted) walked through every numbered step it touches, each line
-   ending in a bracketed topic tag `[8.x.y]`. This is the fast-recall skeleton — keep it, but
-   never let it stand alone.
-2. **"Before the trace starts" callout** (when applicable) — any standing architecture decision
-   that shapes the request but isn't re-decided every call (Stage 1's examples: RAG-not-
-   fine-tuning, managed-not-self-hosted). State the decision, the one-line reason, and what
-   changes if the constraint flips.
-3. **Every step, unpacked, as bullets — never as paragraphs.** For each numbered step in the
-   trace: a bold `**N. Step name** — `[8.x.y]`` header, then flat bullets covering, in this
-   order: (a) the mechanism, (b) the concrete config/numbers this request actually used, (c) one
-   or more `⚠ **Owns:**` bullets for the failure mode this box is responsible for. Nest a nested
-   bullet list where a step has sub-mechanics (e.g. "on 429, in order: 1) … 2) … 3) …"). **Bullets
-   are a hard requirement, not a style preference** — a paragraph cannot be skimmed the night
-   before an interview; a bulleted list can. If you catch yourself writing "X, which means Y,
-   and therefore Z" as prose, break it into three bullets instead.
-4. **Full cram reference — one subsection per topic in this stage, covering every fact in Part
-   B.** This is the block that was missing from every Part C written before this file existed,
-   and it is now mandatory. For every `8.x.y` topic in the stage (CORE *and* WORKING — AWARENESS
-   topics get at least a one-bullet mention), reproduce, as bullets:
-   - the definition's mechanism (condensed from block 1),
-   - every worked number and named table from blocks 3/7 (condensed, not paraphrased away —
-     if Part B says "~15× cost gap," C1 says "~15× cost gap," not "a large cost gap"),
-   - any decision tree / diagnostic table from block 4 (these compress into bullets extremely
-     well — keep the "if X then Y" shape),
-   - the full failure-mode list from block 9.
-   The test for whether this subsection is complete: **could a reader answer every `C4`
-   self-test question for this topic using only this subsection, without opening Part B?** If
-   not, it's missing something concrete — go back and add the number, table, or mechanism that's
-   absent, don't just add more words.
-5. Close with a short **"what this trace doesn't re-run, and why"** note for any topic in the
-   stage that is a standing decision rather than a per-request step (mirrors Stage 1's treatment
-   of 8.1.5/8.1.6), plus forward pointers to `C2` and `C3`.
+### C0. Simple production map
+
+Show the stage as a production flow.
+
+Include:
+
+- The main request or build path.
+- The stage's main control points.
+- What is owned by app code, provider code, retrieval/data systems, release process and operations.
+
+### C1. One request, end to end
+
+Use one realistic request and walk it through the stage.
+
+Required layers:
+
+1. **Standing decisions before the trace**
+   - Decisions that shape every request but are not re-decided every call.
+
+2. **Compact trace**
+   - Numbered steps.
+   - Each step ends with `[8.x.y]` topic tags.
+
+3. **Every step unpacked**
+   - Flat bullets.
+   - Cover the mechanism, concrete config or values, and owned failure modes.
+   - Use bullets for revision. Avoid long paragraphs here.
+
+4. **Full cram reference**
+   - One subsection per Part B topic.
+   - Include the definition mechanism, exact examples, key numbers, decision rules, metrics, tool
+     names, cloud-service roles and failure modes.
+   - A reader should be able to answer the self-test from this section alone.
+
+5. **What this trace does not re-run**
+   - Name standing decisions or release-time work that does not happen on every request.
 
 ### C2. The same request, four ways
 
-One comparison table, same four columns every stage: **Cheapest / Fastest / Most private /
-Highest quality** (a stage may rename a column if a different axis matters more there, but keep
-four columns and keep them constraint-shaped, not model-shaped). Every row must be something
-that actually changes between columns in *this* stage's material — don't repeat Stage 1's rows
-verbatim; ask what this stage's topics add to each configuration (Stage 2's version adds
-few-shot count, history strategy, caching — it doesn't re-litigate model tier).
+Use four constraint-shaped columns, usually:
 
-### C3. What Stage N hands to Stage N+1 (and beyond)
+```text
+Cheapest | Fastest | Most private | Highest quality
+```
 
-A table: **Problem | Goes to.** Every row must trace to something the build narrative in Part A
-explicitly left broken — never invent a forward-reference that Part A didn't set up. If a
-problem is fixed by a *later*, non-adjacent stage (e.g. something Stage 2 leaves broken that only
-Stage 5 fixes), say so explicitly rather than only pointing at the next file.
+Rows must be specific to the stage's own topics. Do not repeat earlier-stage comparisons unless
+the current stage changes the decision.
 
-### C4. Self-test
+### C3. What Stage N hands to later stages
 
-10–25 questions, **numbered, answer-out-loud framed**. Every question must be answerable from
-`C1`'s full cram reference alone (this is the enforcement mechanism for the C1 completeness
-rule — if you can't write a self-test question because the fact isn't anywhere in C1, that's a
-signal C1 is incomplete, not that the question is out of scope). Prefer questions shaped like an
-interviewer's follow-up ("X happened — why?", "you have to choose between A and B — which, and
-what do you give up?") over definition-recall questions ("what is X?"). Close with the one
-diagnostic line Stage 1 uses: *if you can only recite the definition and not the failure mode, it
-is not learned yet.*
+Use a table:
+
+```text
+Problem | Goes to
+```
+
+Every row must trace to something Part A explicitly left unresolved. If the answer is a later
+non-adjacent stage, say that directly.
+
+### C4. Stage implementation ecosystem map
+
+Summarize the stage's practical implementation ecosystem.
+
+Include:
+
+- App-code libraries by language.
+- Cloud services and managed tooling.
+- Evaluation, logging, security, deployment and monitoring tools where relevant.
+- What each tool is used for in this stage.
+
+This section is a cross-topic map. Topic-specific tool explanations still belong inside Part B.
+
+### C5. Self-test
+
+Use 10–25 numbered questions.
+
+Questions should sound like interview follow-ups or production-debugging prompts:
+
+- "This happened — why?"
+- "You must choose between A and B — which one and what do you give up?"
+- "Where would you log this?"
+- "Which part of the system owns this failure?"
+
+Every question must be answerable from `C1`'s full cram reference.
+
+### C6. Self-test answer key
+
+Provide concise answers for every C5 question.
+
+The answer key should:
+
+- Explain the reason, not just name the topic.
+- Reference `[8.x.y]` tags when useful.
+- Include the operational consequence where relevant.
 
 ---
 
 ## 5. Style rules that apply everywhere
 
 - **Bullets over paragraphs, always, for anything enumerable** — lists of causes, steps, knobs,
-  failure modes, comparisons. Reserve full paragraphs for the Definition block's "Plain English"
-  /"Precisely" pair and for Part A's narrative prose. If Part A ever turns into a bullet list, or
-  Part C ever turns into a paragraph, that's backwards — fix it.
-- **⚠ marks a box's owned failure mode** inline, wherever a mechanism section names one, not just
-  in the dedicated Trade-offs block — this is what lets `C1`'s unpacked steps carry failure modes
-  without a separate lookup.
+  metrics, tools, failure modes and comparisons. Reserve full paragraphs for Part A's narrative
+  prose and Part B's concept explanation. If Part A ever turns into a table dump, or Part C ever
+  turns into long paragraphs, fix it.
+- **`⚠ **Owns:**` marks an owned failure mode** inline, especially in `C1`'s unpacked steps. A
+  "box" means a named request-flow step, stage, system layer, or pipeline component, not
+  necessarily a drawn diagram.
 - **Bold the load-bearing noun phrase**, not whole sentences — `**answer field is nullable**`,
   not a bolded paragraph.
 - **Numbers are never bare.** Every number in this document is either (a) a concrete example
-  value from the running scenario, (b) labelled `typical`, (c) labelled a documented default, or
+  value from the running scenario, (b) labelled `typical`, (c) labelled `documented default`, or
   (d) flagged `verify`. A number with none of these is a number nobody can trust six months from
   now.
 - **Cross-reference with the bracket tag**, `[8.x.y]`, inline — never "see above" or "as
@@ -243,36 +432,112 @@ is not learned yet.*
 - `+` prefix marks a topic added beyond the original outline (a gap a technical or public-sector
   panel would reach for). Keep the `+` visible in both `00-MAP.md`'s index and the topic's own
   heading — it's a flag for "this earns its place, it just wasn't in the original spec."
-- Tier (CORE / WORKING / AWARENESS) is decided once, in `00-MAP.md`'s index, and drives which
-  Part B card shape a topic gets (§3 above) and how much of a bullet block it earns in `C1`'s
-  cram reference. If a topic feels like it's outgrown its tier while writing it, fix the tier in
-  `00-MAP.md` rather than silently over-writing a WORKING card.
+- Tier (CORE / WORKING / AWARENESS / ADVANCED) is decided once, in `00-MAP.md`'s index, and drives
+  topic depth in Part B and how much detail it earns in `C1`'s cram reference. If a topic feels
+  like it has outgrown its tier while writing it, fix the tier in `00-MAP.md` rather than silently
+  changing only the stage file.
 
 ---
 
 ## 7. Completion checklist — run this before calling a stage file "done"
 
-- [ ] Part A has a step for every CORE and WORKING topic in this stage's `00-MAP.md` index, and
-      no step exists that doesn't link to a real Part B entry.
-- [ ] Every CORE entry has all nine blocks, in order, with a real (non-placeholder) worked
-      example and a Perspectives grid with exactly six rows.
-- [ ] Every number in the file is labelled `verify`, `typical`, "documented default," or is a
-      concrete example value — none are bare.
-- [ ] `C1` contains the compact trace **and** the per-step bullet unpacking **and** the full
-      per-topic cram reference. Spot-check: pick three `C4` questions at random and confirm each
-      is answerable from `C1` alone.
-- [ ] `C1`'s unpacked steps and cram reference are bullets, not paragraphs. Read it back looking
-      specifically for any sentence containing "which means" or "and therefore" — rewrite those
-      as bullets.
-- [ ] `C2` has four constraint-shaped columns with rows specific to this stage's own topics.
-- [ ] `C3` traces every row to something Part A explicitly left unresolved.
-- [ ] `C4` has 10+ questions, each answerable from `C1`, phrased as interviewer follow-ups where
-      possible.
-- [ ] The running example (government entity, staff, leave policy, Arabic, residency) is the only
-      scenario used — no orphan examples introduced for convenience.
+This checklist is for files marked `v2.0 reference` or `v2.0 migrated`. Legacy files are measured
+against §8's ledger until they are migrated.
+
+- [ ] The file has a rules-status line near the top.
+- [ ] Stage 2 onward has a **Where we are** opener; Stage 1 has clear global front matter and does
+      not use ambiguous references like `A2` when a named section is safer.
+- [ ] Part headings follow the skeleton: `# Part A`, `# Part B`, `# Part C`.
+- [ ] Part A has a concrete symptom for every CORE and WORKING topic in this stage's `00-MAP.md`
+      index, and no step links to a missing Part B entry.
+- [ ] If Part A teaches topics out of numeric order, the file has an order note explaining why.
+- [ ] Part A ends with what the stage can now do, what remains broken, and where the remaining
+      problem goes.
+- [ ] Every Part B topic heading matches the map number, tier, and `+` marker status.
+- [ ] Every CORE topic opens with `> **In the build:** Stage N, Step M — "quoted symptom"`.
+- [ ] Every CORE Part B topic includes simple idea, why it exists, exact example, where it fits,
+      implementation pattern, practical rules, ecosystem/tools/cloud map, senior metrics and
+      failure modes.
+- [ ] Python, .NET/C# and JavaScript/TypeScript examples are placed inside the related concept
+      sections where the concept can reasonably be implemented in app code.
+- [ ] Code examples include a relevant failure path when the concept has a runtime failure path.
+- [ ] Cloud services, SDKs and managed tools are topic-specific and explain what the app still
+      owns, what the service manages, what to log/measure, and what changes if the provider changes.
+- [ ] Every changing service, model, SDK, quota, price, feature, region or product detail is marked
+      `verify`.
+- [ ] Every number is labelled `typical`, `documented default` or `verify`, appears inside an
+      explicitly labelled `Example` / `Exact example` / `worked example` block or `example` table
+      column, or is a mechanism/derived value whose explanation makes that status clear. Use
+      inline `example` only for an invented example value outside those blocks.
+- [ ] Code blocks use real syntax and do not contain fake imports, secret values or unexplained
+      missing logic.
+- [ ] Senior metrics are present for every major topic and are tied to real production behavior.
+- [ ] Failure modes name the wrong setup and the visible symptom.
+- [ ] Part C has `C0` through `C6`, including the ecosystem map, self-test and answer key.
+- [ ] `C1` contains the compact trace, unpacked steps and full per-topic cram reference.
+- [ ] `C2` compares four constraint-shaped versions of the same request.
+- [ ] `C3` only lists unresolved problems that Part A actually set up.
+- [ ] `C4` is the stage implementation ecosystem map, not the self-test.
+- [ ] `C5` questions are answerable from `C1`.
+- [ ] `C6` answers every `C5` question with reasoning, not just topic names.
+- [ ] Cross-references use `[8.x.y]` or deeper valid map tags such as `[8.3.1.4]`; no vague
+      "see above" references.
+- [ ] `+` additions are visible in both `00-MAP.md` and the stage heading.
+- [ ] The stage tiering matches `00-MAP.md`; if the tier changed, the map was updated too.
+- [ ] The running example stays consistent across the file.
+
+---
+
+## 8. Conformance ledger
+
+This ledger prevents silent drift. A legacy row is not a condemnation; it is known migration debt.
+When a stage is migrated, update this table and the stage's rules-status line in the same change.
+Regenerate the mechanical facts with `python stage_conformance_check.py` before editing
+this table by hand. If you need a UTF-8 Markdown file on Windows, use
+`python stage_conformance_check.py --output stage_conformance_check_output.md` instead of shell
+redirection. The default exit code fails only for invalid status, v2.0 drift, or untracked legacy
+drift; use `python stage_conformance_check.py --strict` when you want every legacy heading issue to
+fail too. Last manual review: 2026-08-28 (Stage 1 migrated in that pass). Owner: whoever
+migrates the next stage.
+The script derives rules status validity, C-heading labels, Where-we-are count, backticked
+number-label counts, `example` block/table markers, and map-to-heading sync. The Part C shape
+notes, nonstandard C2/C3 calls, answer-key debt and running-example constraint coverage are
+manual review fields.
+
+**Language coverage is a v2.0 checklist item and Stages 5–7 still fail it.** §3.1 requires
+Python, .NET/C# and JavaScript/TypeScript wherever a concept is app-code implementable. Measured
+2026-08-28: Stage 1 (14/12/12), Stage 2 (30/21/20), Stage 3 (14/12/12) and Stage 4 (12/11/11) carry
+the trio; **Stages 5, 6 and 7 have zero C# and zero TypeScript**. Close it per stage as each is
+migrated, not as a separate sweep — the counterpart has to be written against the concept, not
+translated mechanically.
+
+Running-example constraint coverage is not mechanical — a word count proves presence, not
+grounding — but a zero is still a finding. Measured 2026-08-28, the bilingual Arabic/English
+constraint appears in every stage except Stage 4, and the residency constraint is thinnest in
+Stages 3, 4 and 7. Re-ground a missing constraint where it actually changes behaviour in that
+stage; do not satisfy it by adding a mention.
+
+When migrating a legacy Part C, the self-test usually moves from `C4` to `C5`, and the answer key
+becomes `C6`. Sweep every in-file `C4`/`C5` reference in the same change; do not only rename the
+heading.
+
+| File | Rules status | Part C shape | Known debt |
+|---|---|---|---|
+| `01-Stage1-LLM-Fundamentals.md` | v2.0 migrated | C0–C6 | Migrated 2026-08-28. Global front matter renumbered `F1`–`F4` so it no longer collides with `Part A`; `C0` production map, `C4` ecosystem map and `C6` answer key added; self-test moved `C4`→`C5`; tier badges aligned to the map (`8.1.6` WORKING, `8.1.11`/`8.1.12` AWARENESS). Stage 1 still writes every card at full depth regardless of tier — deliberate, explained in Part B's opening note, not a tier defect. Residual: per-employee data isolation is named in the running-example description but is not yet grounded in a topic where it changes behaviour. |
+| `02-Stage2-Prompt-Context-Engineering.md` | v2.0 reference | C0–C6 | Reference example. Keep future edits aligned with this file's generalized pattern, not its exact topic content. Number-label sweep should prefer explicit `example` / `documented default` markers when touching numeric sections. |
+| `03-Stage3-RAG.md` | v2.0 migrated | C0–C6 | Migrated 2026-08-28. `C0` production map (two-clock index-time/query-time shape with owners), `C4` ecosystem map and `C6` answer key added; self-test moved `C4`→`C5`; tier badges aligned to the map; honesty-label sweep took `verify` from 1 to 14. Content fixes: the cache-key "permission class" resolution was identical to the option it claimed to improve on (now an explicit intersection with the corpus ACL-group set, reconciled across `8.3.5.8`/`8.3.10`/`C2`/answer key); ten dangling four-level cross-references repointed to real parent topics; `Grade A` entitlement reconciled with Stage 2's accrual rate. Second review pass same day (lens E/F): `8.3.6`'s showcase citation object would have been rejected by its own verifier (quote absent from the corpus, cited to the lead-in chunk not the table, claim unqualified against a grade-dependent corpus, two claims and one citation) — rebuilt, and the chunk-level citation example corrected in three places; `8.3.5.8`'s `secure_retrieve` fail-closed guard was dead code and `get_user_principals` hardcoded `+ ["all-staff"]`, a fail-open on the corpus's broadest scope in the one topic whose rule is fail closed — both fixed, with the accidental-fail-open pattern added to the failure modes and `C1`; the ACL OData filter is now escaped rather than string-concatenated. Full Python/C#/TypeScript parity added (12 concepts × 3, 2026-08-28) — closing the §3.1/§7 language-coverage item for this file. Residual: residency is still named only twice in the stage that decides where vectors and embedding calls live — re-ground it in `8.3.3`/`8.3.4` where it changes the decision, not by adding a mention. |
+| `04-Stage4-Agentic-AI.md` | v2.0 migrated | C0–C6 | Migrated 2026-08-28. `C0` production map (read-pipeline → write-path shape, with both trust boundaries), `C4` ecosystem map and `C6` answer key added; self-test `C4`→`C5`; 11 tier badges set; label sweep took `verify` 7→13. Content fixes: **`8.4.10` (A2A) was orphaned at both ends** — no Part A step and no `C1` cram entry, with the completeness claim scoped to "8.4.1 through 8.4.9" to conceal it; now has Step 11 and a full cram entry. Ten dangling four-level cross-references repointed. Bilingual constraint re-grounded from **zero** occurrences where it changes behaviour: tool descriptions as a bilingual routing surface (8.4.2), approval cards rendering in the *approver's* language (8.4.4), Agent Card language in cross-team handoff (8.4.10). Full Python/C#/TypeScript parity added (11 concepts × 3). |
+| `05-Stage5-Guardrails-AI-Security.md` | legacy v1 shape | C1–C4 with nonstandard C2 | Needs C0, C4 ecosystem map, C5/C6 split, heading tier-badge sweep, number/honesty-label sweep, and a decision on whether C2's government-panel shape should remain as a stage-specific adaptation. |
+| `06-Stage6-LLMOps-Evaluation-Telemetry.md` | legacy v1 shape | C1–C4 with nonstandard C2 | Needs C0, C4 ecosystem map, C5/C6 split, heading tier-badge sweep, number/honesty-label sweep, and a decision on whether C2's dashboard shape should remain as a stage-specific adaptation. |
+| `07-Stage7-Classic-ML-MLOps.md` | legacy v1 shape | C1–C4 with nonstandard C2 and C3 | Needs Where-we-are opener, number/honesty-label sweep, C0, C4 ecosystem map, C5/C6 split, heading tier-badge sweep, and decisions on whether C2's Classic ML vs LLM shape and terminal-stage C3 should remain as stage-specific adaptations. |
+
+### Consumers of this spec
+
+- `C:\Users\ibnea\OneDrive\Pictures\New-Prep\.claude\skills\genai-stage-review\SKILL.md`
+- `C:\Users\ibnea\Final-Lesson-Implementation\generate-ai-industry-lesson\SKILL.md`
 
 ---
 
 *This file is itself subject to the same rule as everything else in this repository: if a future
-session finds a gap between what's written here and what actually made Stage 1's Part C work,
+session finds a gap between what's written here and the strongest completed stage-file format,
 fix this file rather than quietly deviating from it in the next stage.*
