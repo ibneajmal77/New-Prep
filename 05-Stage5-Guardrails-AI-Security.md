@@ -1962,44 +1962,299 @@ but are not re-taken per call:
   If this flips — a pilot that quietly became production — then no amount of engineering below
   matters, because nobody accepted the risk and nobody owns the appeal path.
 
-```
+```text
 USER: "Can I carry unused leave into next year?"
 
- 1. INTAKE GUARDRAILS SCAN THE INPUT                              [8.6.3]
-    prompt attacks, harmful content, PII
-    → cheapest place to stop; nothing has been retrieved or generated yet
-    → rate/token/cost budgets enforced here too                  [8.6.12]
+HOW TO SKIM THIS MAP
+  DO       = what runs
+  TOOLS    = techniques / frameworks / implementation pieces
+  REMEMBER = the main exam / interview point
+  NUMBERS  = values worth memorising
+  WATCH    = failure mode or control you must not miss
 
- 2. RESOLVE IDENTITY AND PERMISSIONS                              [8.6.5]
-    user identity from auth · transitive groups · sensitivity clearance
-    → fail closed: no principals means no retrieval
+  1. INTAKE GUARDRAILS SCAN THE INPUT                       [8.6.3 / 8.6.12]
+     DO: Scan user input for prompt attacks, harmful content, PII; block, warn or route to a
+         human; enforce rate/token/cost budgets.
+     TOOLS: Content-safety filter (harm categories, Prompt Shields, blocklists, custom
+            categories); rate limiter (req/min, tokens/min/day, cost/run/day, tool calls per
+            risk class, concurrent runs per tenant).
+     THIS RUN: "Can I carry unused leave into next year?" -> clean, no injection/harm/PII flags,
+               budget check passes.
+     REMEMBER: The cheapest place to stop -- nothing has been retrieved or generated yet.
+               Thresholds are a POLICY decision, not a technical one: low catches more with false
+               positives, high misses more. Government HR: workplace-injury questions mention
+               harm legitimately, grievance questions quote abusive language as evidence, policy
+               text is sensitive by nature, and Arabic/dialectal phrasing scores differently.
+     NUMBERS: Jailbreak shapes to cover [8.6.11]: roleplay, encoding (Base64/ROT13/Unicode),
+              many-shot, obfuscation, authority spoofing, tool-result attack.
+              Rate limiting = OWASP's unbounded consumption, the attack is "denial of wallet".
+     WATCH: A filter block that is not an auditable event -- no denominator for the
+            false-positive rate, so thresholds can never improve. English-only tuning on
+            bilingual traffic. Limits only at the cloud-deployment level protect the provider's
+            resource, not per-tenant budget.
+     SUMMARY: Scan every input for prompt attacks, harmful content and PII before anything is
+              retrieved or generated -- the cheapest possible place to stop an attack -- and
+              enforce per-tenant rate/token/cost budgets here too, since unbounded consumption is
+              a security risk (denial of wallet), not just a cost one; thresholds are a policy
+              call tuned for a bilingual, legitimately-sensitive HR context, and every block must
+              be an auditable event or false-positive rates can never improve.
 
- 3. RETRIEVE ONLY PERMISSIONED, CURRENT CHUNKS         [8.3.5.8 / 8.6.13]
-    ACL pre-filter INSIDE the query · superseded = false
-    · sensitivity label filter
+  2. RESOLVE IDENTITY AND PERMISSIONS                       [8.6.5]
+     DO: Establish user identity from auth; resolve transitive groups + sensitivity clearance;
+         fail closed.
+     TOOLS: Entra ID / identity provider; transitive group resolution.
+     THIS RUN: User identity resolved from session auth; groups + clearance loaded, feeding the
+               retrieval filter in step 3.
+     REMEMBER: The model has NO identity -- it only emits text or structured tool calls. Three
+               identities, and conflating them is the failure: user (basis for every access
+               decision), agent (should have narrow platform access), tool/service credential
+               (must NOT become a superuser path).
+     WATCH: Fail closed -- no principals means no retrieval; an empty result is a service
+            failure, an unfiltered result is a breach. Agent running as a high-privilege service
+            account -- one successful injection leaks everything it can read.
+     SUMMARY: The model has no identity of its own -- resolve the real user's transitive groups
+              and clearance from the identity provider at query time and fail closed if that
+              resolution fails, because an agent running under a broad service-account identity
+              turns any single successful injection into a full data leak.
 
- 4. TREAT RETRIEVED CHUNKS AS UNTRUSTED DATA                      [8.6.2]
-    escape delimiters · mark provenance and trust
-    → scan retrieved content for indirect injection               [8.6.3]
+  3. RETRIEVE ONLY PERMISSIONED, CURRENT CHUNKS             [8.3.5.8 / 8.6.13]
+     DO: ACL pre-filter INSIDE the query, plus a sensitivity-label filter, plus superseded=false.
+     TOOLS: Stage 3's pre-filter, unchanged; DLP label pipeline (ingest label+owner+ACL -> index
+            as filterable metadata -> retrieve only labels allowed for user+purpose -> instruct
+            the model on handling -> validate output for label violations -> log under the same
+            retention class).
+     THIS RUN: Query filtered to Ali's ACLs and Internal-tier label; carry-over policy chunk
+               retrieved.
+     REMEMBER: A label must not just decorate a document -- it must change whether it can be
+               retrieved, summarised, logged or exported. Tiers: Public -> broad, answer+cite;
+               Internal -> employees only, restricted logs; Confidential HR -> HR role+purpose
+               only, no raw content in traces; Secret -> not exposed to the assistant at all,
+               security event.
+     WATCH: Labels captured at ingestion but NOT made filterable in the vector store -- the
+            enforcement point has nothing to filter on. The assistant citing a document the user
+            cannot open.
+     SUMMARY: Reuse Stage 3's ACL pre-filter unchanged, but add a sensitivity-label filter tiered
+              from Public through Secret so a label actually controls retrieval, summarization,
+              logging and export -- not just decoration -- and make sure labels captured at
+              ingestion are indexed as filterable, or there's nothing for the enforcement point to
+              filter on.
 
- 5. GENERATE A GROUNDED ANSWER WITH CITATIONS                     [8.3.6]
-    no secrets in the prompt · content filter configured
-    · max tokens and timeout set
+  4. TREAT RETRIEVED CHUNKS AS UNTRUSTED DATA               [8.6.2 / 8.6.3]
+     DO: Escape delimiters; mark provenance and trust; scan retrieved content for indirect
+         injection.
+     TOOLS: Raise-the-cost layer: prompt structure, delimiters, spotlighting, prompt shields.
+            Remove-the-capability layer: tool least privilege, authorization as the user,
+            deterministic validators, output escaping.
+     THIS RUN: Retrieved carry-over chunk scanned -- no injected instructions found; marked
+               untrusted/document-provenance before entering the prompt.
+     REMEMBER: Transformers have NO hard boundary between instruction tokens and data tokens --
+               roles/delimiters only INFLUENCE behaviour. Direct injection comes from the user;
+               indirect arrives through retrieved content and is MORE dangerous because the user
+               never looked hostile. Only capability-removing controls survive a determined
+               attacker -- "we use delimiters and a strong prompt" fails a security review.
+     NUMBERS: Red-team injection cases in CI: 20-50 minimum, including Arabic.
+     WATCH: Delimiters used without sanitising injected values -- the payload closes the tag
+            early and escapes into instruction space. Tool output assumed trustworthy because it
+            came from an internal API.
+     SUMMARY: Transformers have no hard boundary between instruction and data tokens, so mark
+              every retrieved chunk and tool result as untrusted and scan it for indirect
+              injection -- but delimiters, roles and prompt shields only raise the cost of an
+              attack; only removing the capability (least-privilege tools, authorization as the
+              user, deterministic validators) actually survives a determined attacker.
 
- 6. VALIDATE THE OUTPUT DETERMINISTICALLY                         [8.6.4]
-    schema → business rules → AUTHORIZATION → citations + quotes
-    → PII → safe rendering → policy decision
+  5. GENERATE A GROUNDED ANSWER WITH CITATIONS              [8.3.6 / 8.6.3]
+     DO: Stage 3's grounding contract, now with security framing: no secrets in the prompt,
+         content filter configured, max tokens and timeout set.
+     TOOLS: Grounding prompt (Stage 3, unchanged); content-safety scan fires here as the 2nd of
+            5 checkpoints.
+     THIS RUN: Grounded answer generated from the carry-over chunk; system prompt holds no
+               secrets or internal endpoints.
+     REMEMBER: This is where hostile content ENTERS the context -- the highest-value scan point
+               of the five checkpoints.
+     WATCH: Secrets or internal endpoints placed in the system prompt -- can be exposed or
+            inferred (system prompt leakage is its own OWASP risk).
+     SUMMARY: Reuse Stage 3's grounding contract with security framing added -- no secrets or
+              internal endpoints in the system prompt, content filter configured, max
+              tokens/timeout set -- and treat this as the highest-value scan checkpoint, since
+              it's the exact moment hostile retrieved content enters the model's context.
 
- 7. IF AN ACTION IS REQUESTED: SCOPE THE TOOL, REQUIRE APPROVAL
-    registry → validate → authorize as the user → approval gate
-                                                        [8.6.5 / 8.4.4]
+  6. VALIDATE THE OUTPUT DETERMINISTICALLY                  [8.6.4]
+     DO: Eight-gate ladder: parse/schema -> finish_reason -> business rules -> AUTHORIZATION ->
+         citation+quote verification -> PII/secrets -> safe rendering -> policy decision.
+     TOOLS: JSON schema validators; free string-match quote verification; authorization check;
+            PII/secrets scanner; markdown allowlist, HTML off by default.
+     THIS RUN: Answer parses, cites a real chunk Ali may access, no PII, safe markdown -> policy
+               decision = answer.
+     REMEMBER: Model output is UNTRUSTED INPUT to your application -- structured output
+               guarantees shape, not truth, authority or safe rendering. Citation+quote
+               verification is FREE and catches a fabrication that reads exactly like a genuine
+               citation. Authorization is where a quality bug becomes a SECURITY INCIDENT --
+               code must refuse a valid, well-typed tool call from a user who isn't permitted.
+     NUMBERS: Citation check 100% of answers (free). Groundedness 100% high-stakes, 5-10%
+              routine. Repair retries bounded at 2-3.
+     WATCH: "Structured output" mistaken for "correct output" -- the defining error.
+            Model-generated SQL/code/HTML executed or rendered directly -- improper output
+            handling, a critical vulnerability. Streaming that displays content before outbound
+            checks run on high-risk surfaces.
+     SUMMARY: Model output is untrusted input to your application -- run it through the
+              eight-gate ladder (schema, finish_reason, business rules, AUTHORIZATION,
+              citation+quote check, PII, safe rendering, policy decision) before it reaches the
+              user, since a schema-valid, well-typed action from an unauthorized user is exactly
+              how a quality bug becomes a security incident, and citation+quote verification is
+              free and catches fabrication that reads exactly like a genuine citation.
 
- 8. LOG WHO ASKED WHAT, AND WHAT WAS SHOWN                        [8.6.6]
-    identity, chunk ids, prompt/model versions, safety decisions,
-    approval evidence — immutable, retention-classed
+  7. SCOPE THE TOOL, REQUIRE APPROVAL                       [8.6.5 / 8.4.4]
+     DO: If an action is requested: registry -> validate -> authorize AS THE USER -> approval
+         gate for writes.
+     TOOLS: Short-lived scoped tokens; on-behalf-of user authorization; approval workflow.
+     THIS RUN: Not triggered -- read-only policy question, no write action proposed.
+     REMEMBER: Seven rules: identity from auth, never from model arguments; read/write tools
+               separate; one tool, one job; on-behalf-of where possible; short-lived scoped
+               tokens; approval for risky writes; DENY BY DEFAULT -- missing policy is not
+               permission. Escalation ladder: read public -> read personal (user token+purpose)
+               -> draft (confirmation) -> write (approval+revalidation) -> administrative
+               (usually not exposed to an agent at all). On-behalf-of matters because the source
+               system applies its OWN access control, independent of your agent being correct.
+     NUMBERS: Tools per agent <= 10-20. Administrative tools exposed = zero.
+     WATCH: Blast radius is the union of every tool the agent CAN reach, not the ones it usually
+            uses. The approval system trusting an approver email supplied by the model.
+     SUMMARY: Any proposed action goes through registry -> validate -> authorize AS THE USER
+              (never model-supplied identity) -> approval gate for writes, with deny-by-default as
+              the baseline -- blast radius is every tool the agent CAN reach, not the ones it
+              usually uses, so the real question is never "would the model call this" but "what
+              happens if it does."
 
- 9. RETAIN AND DELETE BY POLICY                                   [8.6.7]
-    prompts, vectors, traces, caches, eval sets — one deletion graph
+  8. LOG WHO ASKED WHAT, AND WHAT WAS SHOWN                 [8.6.6]
+     DO: Record identity, chunk ids, prompt/model versions, safety decisions, approval evidence
+         -- immutable, retention-classed.
+     TOOLS: Append-only audit store, access-controlled separately from ordinary telemetry.
+     THIS RUN: Ali's identity+roles, query, chunk ids, model/prompt version and safety decision
+               logged; no approval needed this run.
+     REMEMBER: Audit is a different question from observability -- observability asks "why is
+               p95 latency high?", audit asks "did user X see document Y, and who approved
+               action Z?" Design tension: complete enough to answer a formal question,
+               controlled enough not to become a SECOND data leak -- store IDs and hashes where
+               possible; raw content only when policy requires it and access controls can hold
+               it. Three properties: immutability, point-in-time identity, access control on the
+               log itself.
+     NUMBERS: Audit retention often YEARS, legally distinct from telemetry retention (days to
+              weeks). Prompt version + model version + index version are the three fields
+              required for reproduction.
+     WATCH: Prompt/model version missing -- makes a complaint unreproducible, the single most
+            common gap. Approval logs recording the click but not the evidence the approver saw.
+     SUMMARY: Audit answers "who saw what and who approved it," a different question from
+              observability -- log identity, chunk ids, prompt/model versions, safety decisions
+              and approval evidence immutably, storing IDs/hashes over raw content so the audit
+              trail doesn't itself become the biggest unprotected copy of sensitive data, and
+              never omit the prompt/model version, the single most common gap that makes an
+              incident unreproducible.
+
+  9. RETAIN AND DELETE BY POLICY                            [8.6.7]
+     DO: Apply one deletion graph across prompts, vectors, traces, caches, eval sets.
+     TOOLS: Residency controls (region selection, private endpoints); redaction pipeline;
+            encryption at rest and in transit.
+     THIS RUN: This request's prompt, retrieved chunks, trace and any cache entries fall under
+               the HR-policy retention class.
+     REMEMBER: The rule that generates every control: if the text would be sensitive in a
+               document, it is sensitive in every derived AI artifact -- chunk, embedding
+               vector, prompt, completion, tool arguments, tool result, trace, golden set,
+               cache. Redact before the model call ONLY when the model does not need the value
+               -- do not redact facts the task requires, enforce access and purpose instead.
+     NUMBERS: Eight residency questions -- the two usually missed: which region processes
+              embeddings and reranking? where are traces, logs and eval datasets stored?
+     WATCH: The embedding model as an unreviewed egress path -- it sends the FULL TEXT of every
+            indexed document, while generation prompts get reviewed because they're visible.
+            Private endpoints on the app while telemetry exports out of region. "We deleted the
+            document" leaving vectors, traces and cached answers behind.
+     SUMMARY: Anything sensitive in a source document is sensitive in every derived artifact it
+              produces -- chunk, embedding, prompt, trace, cache -- so residency, redaction and
+              deletion must all be applied to the whole graph, not just the visible document, and
+              the embedding model in particular is an unreviewed egress path that quietly sends
+              the full text of every indexed document out.
+
+  TOPICS THAT ARE PART OF THIS STAGE BUT NOT DIRECT STEPS IN THIS REQUEST
+
+  N1. OWASP TOP 10 FOR LLM APPLICATIONS                     [8.6.1]
+     WHERE: The INDEX for this whole stage -- every numbered step above is one or more of its
+            ten risks, in depth.
+     WHY NOT A STEP: It is the vocabulary/taxonomy a reviewer uses, not a runtime action inside
+                     this trace.
+     TOOLS: Risk -> control mapping table; prevent/detect/recover framing.
+     REMEMBER: The examinable skill is mapping each risk to a CONCRETE control in your own
+               architecture, not memorising labels. Answer shape: "Risk -> failure -> control ->
+               evidence."
+     NUMBERS: 10 risks: prompt injection, sensitive info disclosure, supply chain, data/model
+              poisoning, improper output handling, excessive agency, system prompt leakage,
+              vector/embedding weaknesses, misinformation, unbounded consumption.
+     WATCH: OWASP memorised as labels but not tied to controls. "The system prompt says not to"
+            as the only defence. A trace store becoming the largest unprotected copy of
+            sensitive data in the system.
+     SUMMARY: OWASP's ten risks are the vocabulary, not the control -- every numbered step above
+              already implements one or more of them, so the real skill being tested is mapping
+              each named risk to a concrete control and evidence in your own architecture, not
+              reciting the list.
+
+  N2. RED-TEAMING                                           [8.6.10]
+     WHERE: Runs in CI and pre-release, not per request -- proves steps 1, 4, 6 and 7 actually
+            hold; its pass rate is what Stage 6 monitors.
+     WHY NOT A STEP: It is an offline testing process, not something that executes inside this
+                     one request.
+     TOOLS: Adversarial test dataset covering the whole application -- prompts, retrieval,
+            tools, approvals, network boundaries, cost controls, logging -- not just the model.
+     REMEMBER: Its output is a regression suite, not a report. Score OUTCOMES, not
+               "blocked/not blocked" -- correct abstention, safe refusal and routed-to-human all
+               count as successes.
+     NUMBERS: Eight test categories: direct injection (English+Arabic), indirect injection, tool
+              misuse, data exfiltration, citation attack, cost attack, rendering attack,
+              governance attack.
+     WATCH: A one-time workshop instead of continuous CI. Only English attacks tested. Pass
+            criterion = "the model said it would not" rather than "the tool did not execute."
+     SUMMARY: Red-teaming is what actually proves steps 1, 4, 6 and 7 hold under attack -- it runs
+              continuously in CI against the whole application, not just the model, scores
+              outcomes like correct abstention and safe refusal as successes, and its pass rate
+              becomes the ongoing metric Stage 6 monitors.
+
+  N3. RESPONSIBLE AI + AI GOVERNANCE                        [8.6.8 / 8.6.9]
+     WHERE: Standing decisions taken BEFORE the system exists and revisited on material change;
+            per-request footprint is only the prompt_version/model_version in step 8's audit
+            record.
+     WHY NOT A STEP: Governance approval and RAI framework mapping happen at design/review time,
+                     not during request execution.
+     TOOLS: Microsoft RAI Standard; NIST AI RMF (govern/map/measure/manage); ISO/IEC 42001; EU
+            AI Act; nine-step intake feeding the AI register.
+     REMEMBER: A good architecture is NOT permission to deploy. Responsible AI is the principle
+               set; governance is the operating model; the bridge is EVIDENCE (risk assessment,
+               control design, evaluation, monitoring, named ownership). Register fields are
+               load-bearing: owner (someone must accept the risk), purpose limitation (prevents
+               uncontrolled reuse).
+     NUMBERS: Review quarterly or on material change (model version, prompt version, scope, data
+              class, population). 3-4 risk tiers. Register completeness = 100% of production
+              systems.
+     WATCH: "Small pilots" becoming production without approval. Vendor review ignoring the
+            embedding model and reranker, which see the entire corpus. A use case approved for
+            HR policy answers quietly expanding to employee discipline.
+     SUMMARY: A good architecture is not permission to deploy -- governance is the standing,
+              pre-existing decision (owner, risk rating, approved purpose, review cadence) that
+              this whole request runs inside of, and its only per-request trace is the
+              prompt_version/model_version in step 8's audit record proving the running system is
+              still the one that was approved.
+
+  N4. JAILBREAK TAXONOMY                                    [8.6.11]
+     WHERE: Feeds step 1's input scanner and the red-team suite (N2) -- a test-design input, not
+            its own runtime step.
+     WHY NOT A STEP: It is a catalogue of attack shapes to scan for, already referenced inside
+                     step 1's NUMBERS field.
+     TOOLS: Canonicalization/decoding scan (encoding attacks); context limits + instruction
+            hierarchy (many-shot); normalization + multilingual testing (obfuscation).
+     REMEMBER: A red-team suite containing one obvious attack string tests almost nothing. Six
+               types: roleplay, encoding, many-shot, obfuscation, authority spoofing,
+               tool-result attack.
+     WATCH: Testing only direct English attacks -- Arabic and mixed-language jailbreaks must be
+            in the regression suite for a bilingual deployment.
+     SUMMARY: The six jailbreak shapes (roleplay, encoding, many-shot, obfuscation, authority
+              spoofing, tool-result attack) are what step 1's scanner and the red-team suite are
+              actually testing for -- a suite with only one obvious English attack string tests
+              almost nothing.
 ```
 
 ### Every step, unpacked — the crux of each topic, as points, in execution order

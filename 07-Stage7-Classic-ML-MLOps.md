@@ -1330,44 +1330,301 @@ each step carries its mechanism, its numbers and its failure mode inline.
   hours in category X" is cheaper, fully explainable and instantly auditable. **"Do not use ML"
   is a legitimate outcome of assessment**, and a model that cannot beat the rule is not ready.
 
-```
+```text
 MODEL: predict SLA breach risk for a service ticket.
 
- 1. ASSESSMENT                                                   [8.7.7]
-    business goal · AI suitability · risk rating · owner
-    · success metric defined NUMERICALLY
-    → "should we use ML at all?" is a real outcome
+HOW TO SKIM THIS MAP
+  DO       = what runs
+  TOOLS    = techniques / frameworks / implementation pieces
+  REMEMBER = the main exam / interview point
+  NUMBERS  = values worth memorising
+  WATCH    = failure mode or control you must not miss
+  SUMMARY  = the one thing to keep long-term if you forget everything else
 
- 2. FRAME THE PREDICTION                                  [8.7.1 / 8.7.2]
-    unit = one ticket · prediction time = creation, refreshed hourly
-    · target = breached SLA within the policy window
-    · action = supervisor review · human role = supervisor decides
+  1. ASSESSMENT                                             [8.7.7]
+     DO: Establish business objective, AI suitability, risk rating, named owner, and a NUMERIC
+         success metric before any modelling starts.
+     TOOLS: Business case template; AI suitability/risk assessment; monitoring plan sketched at
+            this stage, not after deployment.
+     THIS RUN: SLA breach prediction assessed -- objective, owner and a numeric target (recall at
+               acceptable precision) fixed before any code is written.
+     REMEMBER: "Do not use ML" is a legitimate and frequently correct outcome -- if a rule solves
+               it, the rule is cheaper, fully explainable and instantly auditable. What you can
+               monitor constrains what you should deploy, so monitoring must be designed HERE,
+               not after deployment.
+     WATCH: The lifecycle starting at *build* instead of assessment -- every question that later
+            blocks deployment (what action follows a prediction, who acts on it, what success
+            means, who owns it in production) then gets answered retrospectively, under deadline
+            pressure, with a model already built.
+     SUMMARY: Fix the business objective, AI suitability, risk rating, owner and a NUMERIC
+              success metric before any modelling, and design the monitoring plan at this stage
+              too -- "do not use ML" is a legitimate outcome, and skipping straight to build just
+              defers every hard ownership question to a deadline-pressured retrofit.
 
- 3. DATA PREP — FEATURE AVAILABILITY AND LEAKAGE                  [8.7.3]
-    build the availability table · run the six-question leakage
-    checklist · TIME-BASED split · preprocessing inside the pipeline
+  2. FRAME THE PREDICTION                                   [8.7.1 / 8.7.2]
+     DO: Fix prediction, prediction time, unit, target, features, metric, action and human role
+         as a table before any code.
+     TOOLS: Framing table (prediction / prediction time / unit / target / features / metric /
+            action / human role).
+     THIS RUN: prediction = breach probability; prediction time = at creation, refreshed hourly;
+               unit = one ticket; target = breached SLA within policy window; metric = high
+               recall at acceptable precision; action = supervisor review; human role =
+               supervisor decides intervention.
+     REMEMBER: Prediction time is the load-bearing entry -- it determines which features are
+               legal, which is why it precedes feature engineering rather than following it. The
+               metric follows from which error costs more, and the THRESHOLD follows from
+               capacity: if the model flags 400 tickets a day and supervisors can review 60,
+               paper recall is irrelevant.
+     WATCH: A generative model used where a classifier is cheaper and more testable.
+     SUMMARY: Fix prediction time first, since it determines which features are even legal to
+              use, then let the metric follow from which error costs more and the operating
+              threshold follow from real review capacity -- a high-recall model that floods a
+              60-ticket-a-day review queue with 400 flags has a useless threshold no matter how
+              good its paper recall looks.
 
- 4. BUILD — BASELINE FIRST, THEN TRACK                    [8.7.1 / 8.7.5]
-    a rule, then logistic regression, then stronger models
-    · MLflow: params, metrics, artifacts, DATA VERSION, git commit
+  3. DATA PREP -- FEATURE AVAILABILITY AND LEAKAGE          [8.7.3]
+     DO: Build the feature-availability table, run the six-question leakage checklist, split by
+         TIME, and keep all preprocessing inside the pipeline (fit after the split).
+     TOOLS: Feature-availability table (per field: available at creation/scoring/never);
+            six-question leakage checklist; sklearn Pipeline (or equivalent) to force
+            fit-after-split; time-based split; class weights/PR-AUC/threshold
+            tuning/resampling-inside-folds for imbalance.
+     THIS RUN: resolution notes / final resolution time / closed_late marked invalid (closed_late
+               IS the target); time-based split used instead of random.
+     REMEMBER: The six-question checklist's question four is the subtle one: fitting a
+               scaler/encoder on the FULL dataset before splitting leaks test-set statistics into
+               training. Split by TIME for time-ordered data -- a random split lets the model
+               learn from December to predict November, a capability it won't have in production.
+     NUMBERS: Imbalance order: stratified/time-aware split -> class weights -> PR-AUC and recall
+              at threshold -> threshold tuning -> calibrated probabilities -> resampling only
+              inside training folds.
+     WATCH: Resampling before the split -- a leakage bug wearing an imbalance costume, putting
+            duplicates of the same record on both sides. A 0.94 PR-AUC model whose top feature is
+            resolution_time_hours -- the offline number was real and the model is worthless,
+            because that column is null at prediction time.
+     SUMMARY: Build the feature-availability table and run the six-question leakage checklist
+              before touching a model, split by TIME not randomly for time-ordered data, and fit
+              all preprocessing only after the split -- a model that looks brilliant offline
+              (like 0.94 PR-AUC driven by a post-outcome field) but was trained on information
+              that doesn't exist at prediction time is worthless in production, and only the
+              checklist actually run will warn you.
 
- 5. TEST — THE METRIC, THEN THE SEGMENTS                 [8.7.2 / 8.7.10]
-    recall · precision · PR-AUC · calibration
-    → then recompute EVERY metric per segment
+  4. BUILD -- BASELINE FIRST, THEN TRACK                    [8.7.1 / 8.7.5]
+     DO: Build and beat a rule-based baseline first, then try progressively stronger models,
+         logging every run.
+     TOOLS: Logistic regression -> random forest -> gradient boosting (usually best for tabular);
+            MLflow (params, metrics, artifacts, DATA VERSION, git commit, environment, model
+            signature); promotion of a run to a registered version.
+     THIS RUN: Rule baseline, then logistic regression, then a stronger model, each logged with
+               its data version and git commit.
+     REMEMBER: A baseline is MANDATORY and it's a RULE, not a worse model -- without one, "good"
+               is undefined. MLflow logs seven things and the LAST FOUR are the ones omitted:
+               data version, git commit, environment, model signature -- reproducibility that
+               omits the data version is not reproducibility. Promotion is the step AFTER
+               logging; logging without promotion leaves a pile of experiments and no answer to
+               "which one is live?"
+     WATCH: A production endpoint that cannot be traced back to a run.
+     SUMMARY: Beat a rule-based baseline before trying any model, and log every run with all
+              seven MLflow fields including data version and git commit -- reproducibility that
+              omits the data version isn't reproducibility, and a pile of logged experiments with
+              nothing promoted still leaves nobody able to answer "which one is actually live?"
 
- 6. VALIDATE — THE PUBLIC-SECTOR GATES           [8.7.9 / 8.7.11 / 8.6.9]
-    SME review · fairness · explainability · model card · approval
+  5. TEST -- THE METRIC, THEN THE SEGMENTS                  [8.7.2 / 8.7.10]
+     DO: Evaluate the pre-chosen metric (recall/precision/PR-AUC/calibration) once on the
+         untouched test set, then recompute EVERY metric per segment.
+     TOOLS: Confusion matrix as the root of every classification metric; PR-AUC for rare
+            positives (not ROC-AUC); calibration check; segmentation by
+            language/department/geography/user group.
+     THIS RUN: Overall recall 0.85 looked fine, but segmented: English 0.90, Arabic 0.68, web
+               0.88, phone-transcribed 0.63 -- two groups systematically under-served, invisible
+               in the aggregate.
+     REMEMBER: Accuracy on imbalanced data is a trap -- at a 3% breach rate, "always predict no
+               breach" scores 97% and is worthless. Calibration matters the moment a score is
+               shown as a risk -- an uncalibrated 0.8 presented as "80% likely" is misleading, not
+               merely suboptimal. The test set is touched ONCE; any reuse invalidates the
+               estimate.
+     WATCH: Metrics not segmented by language, department, geography or user group. ROC-AUC high
+            while the chosen threshold is operationally useless.
+     SUMMARY: Evaluate the pre-chosen metric once on an untouched test set, then recompute every
+              metric per segment, because an aggregate recall of 0.85 can hide Arabic and
+              phone-transcribed performance in the 0.60s -- no single aggregate number will ever
+              surface that, and touching the test set more than once invalidates the whole
+              estimate.
 
- 7. DEPLOY — REGISTER, THEN ROLL OUT GRADUALLY            [8.7.4 / 8.7.6]
-    register only if the gate passes · online and/or batch endpoint
-    · shadow → canary → blue/green · rollback ready
+  6. VALIDATE -- THE PUBLIC-SECTOR GATES                    [8.7.9 / 8.7.11 / 8.6.9]
+     DO: Run SME review, fairness checks and explainability, produce the model card, and get
+         formal approval as GATES, not paperwork produced afterward.
+     TOOLS: Fairness metrics (demographic parity, equal opportunity, equalized odds, calibration
+            by group, disparate impact ratio); SHAP (consistent, costlier) / LIME (fast, less
+            stable) for local explanations; model card (intended use, out-of-scope use, training
+            data, metrics, segments, limitations, oversight, monitoring, owner).
+     THIS RUN: Fairness metrics checked per segment; model card drafted with the out-of-scope row
+               (e.g. not employee performance evaluation); explanation order for any flagged
+               ticket set to policy basis -> input facts -> score -> contributing factors ->
+               appeal path.
+     REMEMBER: Fairness metrics can CONFLICT -- parity and calibration generally can't both hold
+               when base rates differ, so choosing which applies is a POLICY decision with legal
+               input, not an engineering preference. The fairness paradox: you cannot measure
+               disparity across a protected attribute without holding it for evaluation --
+               discarding it makes unfairness unmeasurable, not absent. For a decision about a
+               person, never say "the AI decided" -- the score comes THIRD, after the policy
+               basis and the input facts, before the contributing factors and appeal path.
+     WATCH: Chain-of-thought from an LLM treated as an audit explanation -- it's a plausible
+            narrative, not a causal account. Proxy features unexamined, so department/channel/
+            language silently encodes a protected attribute.
+     SUMMARY: Treat SME review, fairness, explainability, the model card and approval as GATES
+              the model must pass, not documentation written after the fact -- fairness metrics
+              can conflict so choosing which one applies is a legal/policy call, and discarding a
+              protected attribute to "avoid bias" only makes the bias unmeasurable, it doesn't
+              remove it.
 
- 8. MONITOR — SIX DRIFTS AND A DELAYED TRUTH                      [8.7.6]
-    schema · data · prediction · concept · label · fairness
-    → log prediction, WAIT for outcome, join label, compare, alert
+  7. DEPLOY -- REGISTER, THEN ROLL OUT GRADUALLY            [8.7.4 / 8.7.6]
+     DO: Register the model only if it clears the metric gate, then roll out through shadow ->
+         canary -> blue/green with rollback ready.
+     TOOLS: Model registry gated on `if recall >= 0.85 and precision >= 0.55: register(...)`;
+            managed online endpoint (real-time) and/or batch endpoint (hourly/nightly), sharing
+            the same preprocessing code.
+     THIS RUN: Model registered tagged with metrics + data version, then shadow-scored before any
+               canary rollout.
+     REMEMBER: Registration is a PROMOTION decision, not a save operation -- gated on the
+               business metric, not just "training finished." If both an online and a batch
+               endpoint exist, they MUST share the same preprocessing code, or the two paths
+               silently disagree. Same rollout discipline as Stage 6: shadow (score, don't act)
+               -> canary (5-10%) -> blue/green.
+     WATCH: Notebook output manually copied into production. Data, environment and code versions
+            not tied to the registered model, so the running model can't be reproduced.
+     SUMMARY: Register only when the model clears its business-metric gate, then roll out through
+              the same shadow -> canary -> blue/green discipline as Stage 6 -- if an online and a
+              batch endpoint both exist they must share identical preprocessing code, or the two
+              paths quietly diverge and disagree with each other in production.
 
- 9. SUPPORT — RETRAIN, RE-GATE, RETIRE                   [8.7.6 / 8.7.11]
-    retraining automated · PROMOTION never · model card updated
+  8. MONITOR -- SIX DRIFTS AND A DELAYED TRUTH              [8.7.6]
+     DO: Log every prediction, wait for the outcome, join the label when it arrives, compute
+         performance, compare to baseline, alert and investigate.
+     TOOLS: Schema validation (schema drift); PSI/distribution distance (data drift); output
+            distribution (prediction drift); delayed ground-truth performance (concept drift);
+            policy/process review (label drift -- no distribution test catches this); segment
+            metrics (fairness drift).
+     THIS RUN: Predictions logged at creation; ground truth joined when each ticket closes
+               hours-to-days later; performance compared against the launch baseline.
+     REMEMBER: The ground-truth delay is the DEFINING operational property -- you only learn the
+               truth when the ticket closes, which is exactly why data and prediction drift
+               matter: they're the ONLY signals available before labels arrive. The worked decay:
+               launched at 0.87 recall, six months later 0.71, with nothing "broken" -- two new
+               ticket categories (data drift), a renamed upstream field arriving null (schema
+               drift), a changed SLA policy (label drift) -- and NONE of them raised an error.
+     NUMBERS: PSI ~0.1 moderate, ~0.25 significant drift.
+     WATCH: Drift alerts with no owner and no runbook -- a fired alert nobody is accountable for
+            trains the team to ignore the channel. Ground truth arriving late and nobody closing
+            the loop.
+     SUMMARY: Log every prediction and wait for the ground truth to arrive before you can measure
+              real performance -- until then, data and prediction drift are the only signals you
+              have, and a model can decay from 0.87 to 0.71 recall over six months with zero
+              errors raised, purely from new categories, a silently null field, and a changed
+              policy definition.
+
+  9. SUPPORT -- RETRAIN, RE-GATE, RETIRE                    [8.7.6 / 8.7.11]
+     DO: Retrain on a defined trigger, but always re-run the full promotion gate before shipping,
+         and update the model card every time.
+     TOOLS: Retraining triggers (performance drop, drift, policy/process change, new labelled
+            data, fairness regression, deprecation); promotion gate (data checks, metrics,
+            fairness didn't regress, explainability reviewed if high-impact, model card updated,
+            canary/shadow completed).
+     THIS RUN: A retraining trigger (e.g. a drift alert) would kick off a new training run, which
+               must still clear every gate again before replacing the live model.
+     REMEMBER: Retraining CAN be automated. Promotion must NOT be. Policy or process change is
+               the trigger nobody automates, because it arrives as an email, not a metric.
+               Support is planned LAST and lasts LONGEST -- incidents, retraining, card updates
+               and eventual retirement are the majority of a model's life.
+     WATCH: Retraining that ships automatically without validation and approval. A model card
+            written once for approval and never updated, so it describes a model that is no
+            longer running.
+     SUMMARY: Automate the retraining trigger, never the promotion -- every retrained model
+              re-runs the same fairness/metrics/explainability/model-card gate as the first
+              release, and the policy-change trigger is the one nobody automates because it shows
+              up as an email, not a metric, while a model card left un-updated after retraining
+              quietly stops describing the model actually running in production.
+
+  TOPICS THAT ARE PART OF THIS STAGE BUT NOT DIRECT STEPS IN THIS REQUEST
+
+  N1. TELLING THE NARRATIVE                                  [8.7.8]
+     WHERE: The delivery layer over the other eight steps -- its "execution" happens in an
+            interview room, not in production.
+     WHY NOT A STEP: It's how the lifecycle gets communicated afterward, not something the model
+                     itself runs through.
+     TOOLS: One continuous example carried throughout; decisions-and-constraints framing per
+            stage, not stage names.
+     REMEMBER: Candidates who've read about this describe STAGES; candidates who've done it
+               describe DECISIONS AND CONSTRAINTS. Three things to volunteer unasked: the appeal
+               path, Arabic/bilingual coverage, "we might conclude a rule is better than a
+               model."
+     NUMBERS: Full answer 60-90s; short version 20-30s; one example carried throughout; 2-3
+              concrete numbers; algorithms get one clause only.
+     WATCH: Reciting vocabulary instead of decisions. Starting at model training. Stopping at
+            deployment, omitting monitoring and support. Switching examples mid-answer.
+            Over-indexing on algorithms. Never mentioning ML might be the wrong tool.
+     SUMMARY: Tell the whole lifecycle as one continuous example where each stage is represented
+              by the decision made and the constraint that drove it, not its name -- feature
+              availability at prediction time and delayed ground truth are the two beats that
+              most signal real experience, and stopping the narrative at deployment (skipping
+              monitoring and support) is the single most common tell of someone who hasn't
+              actually run a model in production.
+
+  N2. MODEL CARDS                                            [8.7.11]
+     WHERE: Produced once at validation (step 6) and updated at every retrain (step 9) -- an
+            artifact that recurs, not a stage of its own.
+     WHY NOT A STEP: It's the documentation output of two other steps, not an independent
+                     execution point.
+     TOOLS: Model card fields: intended use, out-of-scope use, training data, metrics, segments
+            with numbers, limitations, human oversight, monitoring plan, owner.
+     REMEMBER: The out-of-scope row does the MOST work -- it's purpose limitation at model level,
+               stopping a triage model being repurposed for something about people's careers.
+               It's the Stage 7 counterpart of Stage 5's AI register entry (8.6.9).
+     WATCH: A model card written once for approval and never updated after retraining or
+            replacement, so it describes a model that is no longer running.
+     SUMMARY: The model card is produced at validation and MUST be re-updated at every retrain --
+              its out-of-scope-use row is the purpose-limitation control that stops a model built
+              for one decision quietly being repurposed for a higher-stakes one, and a card
+              that's never updated after retraining just documents a model that no longer exists.
+
+  N3. AZURE ML + MLFLOW                                      [8.7.4 / 8.7.5]
+     WHERE: The substrate steps 4, 7 and 9 record and deploy their artifacts on -- a platform
+            decision made once, not a step re-taken per model.
+     WHY NOT A STEP: Choosing and configuring the platform happens once; every step after that
+                     just uses it.
+     TOOLS: Azure ML (workspace, compute, versioned data asset, pipeline, model registry, online
+            endpoint, batch endpoint); MLflow (params, metrics, artifacts, data version, git
+            commit, environment, model signature; run promotion to a registered version).
+     REMEMBER: Azure ML's value is NOT compute -- it's that data, code, environment and model
+               version become linked, versioned artifacts. MLflow answers "which run produced the
+               model currently serving traffic?" Registration is a promotion decision gated on
+               the business metric, not a save operation.
+     WATCH: Notebook output copied into production. Data/environment/code versions not tied to
+            the registered model. Real-time and batch preprocessing diverging.
+     SUMMARY: Azure ML and MLflow exist to turn data, code, environment and model version into
+              linked, versioned, promotable artifacts, not just to provide compute -- without
+              that link, nobody can answer "which run produced the model currently serving
+              traffic," and a notebook's output copy-pasted into production has none of these
+              guarantees at all.
+
+  N4. ML FUNDAMENTALS                                        [8.7.1]
+     WHERE: The framing decision inside assessment (step 1) that decides whether any of the rest
+            of this file even applies.
+     WHY NOT A STEP: It's not something executed on the model -- it's the "is this an ML problem
+                     at all?" question answered before assessment produces its outputs.
+     TOOLS: Classic ML (features available now -> score -> business action) vs LLM (instructions
+            + context -> generated text); baseline as a mandatory concept; train/validation/test
+            split; cross-validation.
+     REMEMBER: The first question is never "which model?" -- it's "what is the business decision,
+               and what information exists at decision time?" A generative model used where a
+               classifier is cheaper and more testable is the single most common framing failure
+               in this stage.
+     WATCH: The test set touched during feature/model selection. Time-based data split randomly
+            instead of by time.
+     SUMMARY: Before any of the nine steps run, decide whether this is even a classic-ML
+              prediction problem (features now -> score -> action) rather than a generation
+              problem -- getting that framing wrong is how a generative model ends up doing a
+              classifier's job: more expensive, less testable, and impossible to calibrate.
 ```
 
 ### Every step, unpacked — the crux of each topic, as points, in execution order

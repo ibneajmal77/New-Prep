@@ -3598,43 +3598,291 @@ these on every call:
   messages keep the request understandable. They are structure, not security. Real injection
   defence still belongs to Stage 5.
 
-```
+```text
 USER (turn 15): "So what's my balance after that?"
 
- 1. LOAD MEMORY TIERS                                             [8.2.4]
-    long-term: {grade: B, joined: 2026-03-15}   ← retrieved, not carried
-    short-term: summary of turns 1-12 + turns 13-14 verbatim
+HOW TO SKIM THIS MAP
+  DO       = what runs
+  TOOLS    = techniques / frameworks / implementation pieces
+  REMEMBER = the main exam / interview point
+  NUMBERS  = values worth memorising
+  WATCH    = failure mode or control you must not miss
 
- 2. ASSEMBLE THE PREFIX — STABLE FIRST                    [8.2.5 / 8.2.1]
-    system prompt (280) + few-shot (620) + tool schemas (900)
-    → 1,800 tokens, byte-identical, cacheable
-    → NOTHING dynamic in here. Timestamp goes after.
+  1. LOAD MEMORY TIERS                                      [8.2.4]
+     DO: Load the tiers this turn needs: working (context window), short-term (session store),
+         long-term (retrieved semantically), episodic (event log by reference).
+     TOOLS: session store; vector/db retrieval for long-term memory; hierarchical compaction
+            (recent verbatim + mid-range summary + retrieved long-term).
+     THIS RUN: long-term = {grade: B, joined: 2026-03-15} retrieved, 150 tok; short-term =
+               400-tok summary of turns 1-12 + turns 13-15 verbatim at 1,200 tok.
+     REMEMBER: Four tiers differ by LIFETIME and RETRIEVAL MECHANISM, not importance. Summarise
+               for retention of decisions/constraints, not readability -- "Grade B, joined
+               15 March, took 12 days" is a good summary; "the user asked about leave" throws
+               the conversation away. 3 compaction strategies, ascending quality: sliding window
+               (cheap, forgets) < summarize-and-replace (standard, risks lossy compression) <
+               hierarchical (best, most machinery -- used here).
+     WATCH: Putting everything in working memory because it's easiest -- by turn 15 cost per
+            message roughly triples and a turn-two constraint is gone. A summary dropping "I'm
+            on secondment" makes every later answer wrong, and nothing reports a problem.
+     SUMMARY: Four memory tiers (working, short-term, long-term, episodic) differ by lifetime and
+              retrieval mechanism, not importance -- load only what's needed using hierarchical
+              compaction (recent verbatim + summarized mid-range + retrieved long-term), and always
+              summarise for decisions/constraints kept, not readability, because a dropped
+              constraint produces no error, just a silently wrong later answer.
 
- 3. ADD THE VOLATILE SUFFIX, IN ORDER                        [8.2.4 / 8.2.5]
-    timestamp → memory → summary → recent turns → documents → question
-    delimiters around every document                              [8.2.6]
+  2. ASSEMBLE THE PREFIX -- STABLE FIRST                    [8.2.5 / 8.2.1]
+     DO: Build the byte-identical, cacheable prefix first: system prompt + few-shot + tool
+         schemas. Nothing dynamic goes here.
+     TOOLS: Provider KV-cache (prefill builds a deterministic KV state, hashed and stored by the
+            provider); role-tagged messages list (system/user/assistant/tool).
+     THIS RUN: system prompt 280 + few-shot 620 + tool schemas 900 = 1,800 tokens, byte-identical
+               on every call.
+     REMEMBER: PREFIX-ONLY, front-anchored matching -- change the LAST line of the system prompt
+               and the first 1,799 tokens still hit; change the FIRST line and all of it is
+               gone. EXACT, byte-for-byte match (whitespace, key order all count). Few-shot
+               lives here specifically so it's cached -- 3-5 examples is the sweet spot.
+     NUMBERS: Prefix 1,800 tokens this run. Minimum cacheable size ~1,000+ tokens (verify per
+              provider). Cache TTL a few minutes, refreshed on each hit.
+     WATCH: Anything dynamic in the prefix (timestamp, user name, session/request ID) -> 0% hit
+            rate, NO ERROR, found in the invoice weeks later. An edit here invalidates the cache
+            for EVERY user simultaneously. The system prompt is not a security boundary and
+            silently accumulates contradictory instructions across edits.
+     SUMMARY: The stable prefix (system prompt + few-shot + tool schemas, byte-identical every
+              call) is cached via a front-anchored, exact-match KV cache -- keep it free of
+              ANYTHING dynamic, because one dynamic token anywhere in it silently drops the hit
+              rate to 0% with no error, just a bigger invoice, and an edit here busts the cache
+              for every user at once.
 
- 4. PLACE THE DOCUMENTS DELIBERATELY                              [8.2.4]
-    best chunk first, second-best LAST, the rest in the middle
-    → defeats lost-in-the-middle
+  3. ADD THE VOLATILE SUFFIX, IN ORDER                      [8.2.4 / 8.2.5 / 8.2.6]
+     DO: Append everything that changes per-request, ordered stable-to-volatile; wrap every
+         document in delimiters.
+     TOOLS: Ordering rule: system prompt -> few-shot -> tool schemas -> long-term memory ->
+            conversation summary -> recent turns -> retrieved documents -> question. Delimiters
+            (XML tags, ### fences, backticks) plus an instruction explaining what they mean.
+     THIS RUN: timestamp -> memory (150) -> summary (400) -> recent turns (1,200) -> documents
+               (3,600) -> question (40).
+     REMEMBER: Everything LEFT of the first change is cacheable, so anything that changes
+               per-request goes as far RIGHT as possible -- the timestamp isn't removed, it's
+               MOVED. The delimiter marker barely matters; what matters is being consistent and
+               telling the model what the marker means.
+     WATCH: Delimiters used without an instruction explaining them do nothing. A delimiter not
+            stripped/escaped from an injected value lets user text close the tag early and
+            escape into instruction space. Treating delimiters as sufficient -- they raise the
+            cost of an attack, they are not a security control (real defence is Stage 5).
+     SUMMARY: Order the suffix stable-to-volatile (system -> few-shot -> schemas -> memory ->
+              summary -> recent turns -> documents -> question) so nothing dynamic contaminates
+              the cached prefix, and wrap every document in delimiters WITH an instruction
+              explaining what they mean -- delimiters only raise the cost of an attack, and an
+              unsanitised injected value can close the tag early and escape into instruction
+              space.
 
- 5. ENFORCE THE BUDGET                                            [8.2.4]
-    total input 7,190 + output reserve 800 ≤ 128,000  ✓
-    if over: compact history → prune tool results → drop lowest chunks
+  4. PLACE THE DOCUMENTS DELIBERATELY                       [8.2.4]
+     DO: Order retrieved chunks for attention: best first, second-best last, the rest in the
+         weak middle; the question goes last of all.
+     TOOLS: Reranked chunk list re-ordered before insertion -- never concatenated in rank order.
+     THIS RUN: Chunks placed to defeat lost-in-the-middle; question appended immediately before
+               generation.
+     REMEMBER: Lost in the middle -- attention over long contexts is uneven: beginning and end
+               recalled reliably, the middle much less so. Fitting is not using. Fewer, better
+               chunks beat more (3-8 typical). No conflict with caching: documents are volatile
+               anyway so they belong late regardless; the stable prefix owns the strong opening,
+               the question owns the strong closing.
+     WATCH: Rank-order concatenation buries the best evidence in the worst position -- no error
+            raised, just a plausible, confident, wrong answer built from rank 6.
+     SUMMARY: Attention is uneven over long contexts (lost in the middle), so place the best
+              chunk first, second-best last, the rest in the weak middle, with the question last
+              of all -- never concatenate a reranked list in rank order, since that buries the
+              best evidence and produces a confident, wrong answer with no error raised.
 
- 6. APPLY THE TECHNIQUE THE TASK NEEDS                            [8.2.2]
-    this is a multi-step calculation → structured CoT
-    → reasoning FIELD before answer FIELD in the schema            [8.1.4]
+  5. ENFORCE THE BUDGET                                     [8.2.4]
+     DO: Check total input + output reserve against the context window; evict in a fixed order
+         if over.
+     TOOLS: Per-section token counting; eviction order: 1) compact history -> 2) prune tool
+            results -> 3) drop the lowest-ranked chunks.
+     THIS RUN: stable prefix 1,800 + memory 150 + summary 400 + recent turns 1,200 + documents
+               3,600 + question 40 = TOTAL INPUT 7,190; output reserve 800; against 128,000 ->
+               fits, 120,010 headroom.
+     REMEMBER: Fitting easily is not the point -- 7,190 tokens are paid on EVERY call, and
+               headroom is not a reason to fill it. App default split: stable prefix fixed;
+               documents ~40-50% of budget, hard cap; history ~20-30%, compacted past a
+               threshold; output reserve fixed, never let input eat it. Tool-result pruning
+               happens BEFORE insertion (select fields, truncate, summarise, or store externally
+               + insert a reference).
+     NUMBERS: Output reserve 500-2,000 tok; chunks 3-8 after reranking; document budget 30-50%
+              of input; history compaction threshold 2,000-4,000 tokens or a turn count;
+              tool-result cap 500-2,000 tok/result.
+     WATCH: No output reserve -> truncated answers, finish_reason:length, broken JSON. Unpruned
+            tool results -- the single most common way agent loops die, context grows every
+            iteration until the request fails. Never measuring input tokens per request -- the
+            cheapest early-warning metric in this stage.
+     SUMMARY: Track input+output against the context window explicitly (this run: 7,190 input +
+              800 output reserve out of 128,000) and evict in a fixed order when over -- compact
+              history, then prune tool results, then drop the lowest-ranked chunks -- because
+              unpruned tool results are the single most common way agent loops die, and a slow
+              upward drift in input tokens per request is the cheapest early-warning signal you
+              have.
 
- 7. CALL                                                    [8.1.2 / 8.1.8]
-    temperature 0, max_tokens 800, pinned deployment
+  6. APPLY THE TECHNIQUE THE TASK NEEDS                     [8.2.2]
+     DO: Diagnose the failure type first, then apply exactly the one technique that fixes it.
+     TOOLS: few-shot (format problem); chain-of-thought -- zero-shot / few-shot / structured
+            (reasoning problem); ReAct -- think->act->observe loop (information problem);
+            self-consistency -- N samples, majority vote (reliability problem).
+     THIS RUN: Multi-step calculation -> structured CoT: schema with `reasoning` field BEFORE
+               `answer`. Zero-shot gave 11.75 (wrong -- silently applied the wrong grade's rate
+               across the whole period); structured CoT walks Grade A/B periods separately ->
+               10.00 days, correct AND auditable.
+     REMEMBER: Field order is the whole trick -- the model generates top to bottom, so
+               reasoning-before-answer forces it to reason before committing; reverse the fields
+               and you get a guess followed by an invented justification. Applying all four
+               techniques everywhere is expensive and unfocused. ReAct IS the agent pattern --
+               8.4.1 is this same loop with production controls added.
+     NUMBERS: Few-shot +200-800 input tokens (cacheable); zero-shot/structured CoT +100-500
+              output tokens; ReAct 2-10x (several round trips); self-consistency 3-5x output
+              cost. Agreement: 5/5 -> return, 3/5 -> flag for review, 2/5 -> escalate, don't
+              answer.
+     WATCH: CoT on a reasoning model is redundant and can degrade quality. Treating stated
+            reasoning as a guaranteed audit trail -- it's a plausible explanation, not a causal
+            account. Few-shot examples containing real personal records leak into every request
+            forever -- use synthetic data. ReAct without a loop cap -- an agent that thinks and
+            acts forever.
+     SUMMARY: Diagnose the failure type first (format -> few-shot, reasoning -> CoT, missing info
+              -> ReAct, reliability -> self-consistency) and apply exactly one technique -- for a
+              multi-step calculation, put `reasoning` BEFORE `answer` in the schema so the model
+              reasons before committing, since reversing the fields turns it into a guess followed
+              by an invented justification; applying every technique everywhere is expensive and
+              unfocused.
 
- 8. HANDLE THE FOUR OUTCOMES                                      [8.2.6]
-    refusal? filter block? abstention? error? — each handled differently
+  7. CALL                                                    [8.1.2 / 8.1.8]
+     DO: Make the model call with the assembled prompt.
+     TOOLS: temperature 0, max_tokens 800 (the same 800 reserved in step 5), pinned deployment,
+            managed identity.
+     THIS RUN: One call -- self-consistency not used here.
+     REMEMBER: Stage 2 changes WHAT is in the call, not HOW the call is made -- Stage 1's box is
+               unchanged. If self-consistency were used it is N SEPARATE calls at temp>0, not a
+               native multi-sample parameter; because the calls share a byte-identical prompt, a
+               well-cached prefix bills calls 2-5 at the cached-input rate -- that's what makes
+               real cost land near "input once, output five times", and it comes from caching,
+               not a billing mode.
+     WATCH: Running self-consistency at temperature 0 -- all N calls return identical samples,
+            you pay 5x to measure nothing.
+     SUMMARY: Stage 2 changes WHAT goes into the call (memory, documents, technique), not HOW the
+              call is made -- Stage 1's temperature/max_tokens/pinned-deployment box is
+              unchanged; if self-consistency is used it must run at temperature > 0 as N separate
+              calls sharing one cached prefix, or you pay 5x for five identical, useless samples.
 
- 9. RECORD                                          [8.2.3 / 8.2.5 / 8.5.3]
-    prompt_version, model/deployment, input/output tokens, cached_tokens ratio,
-    latency/TTFT, retrieved document IDs, tool calls, outcome type, feedback
+  8. HANDLE THE FOUR OUTCOMES                                [8.2.6]
+     DO: Detect and route: refusal, abstention, filter block, error -- each handled differently.
+     TOOLS: Detection order in code: explicit `refusal` field -> `finish_reason ==
+            "content_filter"` -> `answer is None and not sufficient_context` (abstention) ->
+            otherwise the error path.
+     THIS RUN: Normal answer path; response formatted per instruction (length, structure,
+               register, answer in the language of the question).
+     REMEMBER: Refusal = model declined on safety grounds, false positives common (explain + log
+               to review queue). Abstention = no grounds to answer, CORRECT behaviour (tell
+               user, log the retrieval miss). Filter block = platform blocked it, a policy
+               outcome not a bug. Error = something failed technically (retry, fall back,
+               alert). "Answer in the language of the question" is not a nicety in a bilingual
+               entity -- without it Arabic questions often come back in English.
+     WATCH: Collapsing all four outcomes into one generic error message -- nobody can tell a
+            false positive from an outage. Auto-retrying a refusal burns cost to be refused
+            again. Showing raw refusal text can leak the system prompt. Never reviewing refusals
+            means filter thresholds never get tuned.
+     SUMMARY: Refusal, abstention, filter block and error look similar in a response body but
+              need different handling and different code checks (refusal field ->
+              content_filter -> null answer + not sufficient_context -> otherwise error) --
+              collapsing them into one generic error erases the difference between a false
+              positive and an outage, and refusals need a review queue, not a silent auto-retry.
+
+  9. RECORD                                                  [8.2.3 / 8.2.5 / 8.5.3]
+     DO: Attach prompt_version, cached_tokens/input_tokens ratio, token counts, latency,
+         model/deployment and feedback to every logged response.
+     TOOLS: Versioned prompt registry (prompts/hr_assistant/v1.2.0.prompty + CHANGELOG.md +
+            evals/golden_set.jsonl); cache_hit_ratio metric + alert; A/B routing by
+            hash(user_id).
+     THIS RUN: prompt_version "1.2.0_B", cached_tokens/input_tokens ratio, latency/TTFT,
+               retrieved document IDs, tool calls and outcome type all recorded.
+     REMEMBER: `prompt_version` missing from telemetry is THE single most common gap -- makes
+               incident triage impossible three weeks later. A broken cache produces NO error,
+               no exception, no user complaint -- just a quietly larger bill; the invoice is the
+               only signal. A/B: hash the USER, not the request, so one person gets a consistent
+               experience; judge on the same offline metrics PLUS cost and latency.
+     NUMBERS: cache_hit_ratio alert threshold ~0.5. A/B traffic split ~10% to the candidate.
+     WATCH: No changelog -- nobody knows WHY a rule exists, someone eventually removes it. A/B
+            tests judged on impressions rather than the eval harness.
+     SUMMARY: Attach prompt_version, cached_tokens/input_tokens ratio, and full cost/latency data
+              to every logged response, because a missing prompt_version is the single most
+              common telemetry gap and makes incident triage impossible, and a broken cache
+              produces NO error or complaint -- only a quietly larger invoice -- so
+              cache_hit_ratio needs its own standing alert.
+
+  TOPICS THAT ARE PART OF THIS STAGE BUT NOT DIRECT STEPS IN THIS REQUEST
+
+  N1. PROMPT ROLES: SYSTEM / USER / ASSISTANT / TOOL         [8.2.1]
+     WHERE: The shape every other step writes into -- steps 2 and 3 are entirely a decision
+            about which role gets which content, in which order.
+     WHY NOT A STEP: Not a runtime decision re-taken per call; it's the structural convention
+                     the whole prefix/suffix assembly follows.
+     TOOLS: openai/anthropic message lists; .NET ChatMessage; Semantic Kernel ChatHistory;
+            LangChain SystemMessage/HumanMessage/AIMessage.
+     REMEMBER: system = rules of the app; user = what the person asks; assistant = what the
+               model said before; tool = facts returned by backend code. The prior assistant
+               turn is load-bearing, not decoration -- without it "and if I joined mid-year?"
+               has no referent.
+     WATCH: Instructions placed in the USER message, where user text can contradict them.
+            Treating the system prompt as a security boundary -- it only raises the cost of an
+            attack (real controls are Stage 5). Trusting previous assistant replies as facts
+            instead of checking the real source system.
+     SUMMARY: Roles (system = app rules, user = input, assistant = prior replies, tool = backend
+              facts) are structure, not security -- they only raise the cost of an attack, never
+              prevent one -- and the prior assistant turn is load-bearing, since without it a
+              follow-up like "and if I joined mid-year?" has no referent to resolve against.
+
+  N2. PROMPT MANAGEMENT: TEMPLATING, VERSIONING, A/B        [8.2.3]
+     WHERE: The lifecycle AROUND the prefix -- templating, versioning, release gating, A/B
+            assignment. Its only per-request footprint is the prompt_version tag step 9 records.
+     WHY NOT A STEP: Design-time/release-time work, not something that runs on this one request.
+     TOOLS: Jinja2, LangChain PromptTemplate, Semantic Kernel .prompty files, Azure AI Foundry
+            prompt assets; Git + LangSmith prompt hub + MLflow prompt registry for versioning.
+     REMEMBER: Prompts are composed, not concatenated -- an inline f-string can't be versioned,
+               diffed, tested or reviewed; a named template can be all four. An unversioned
+               prompt is an unversioned requirement -- "which prompt produced this?" must have
+               an auditable answer. Layout: v1.0.0...v1.2.0.prompty + CHANGELOG.md (the WHY is
+               the valuable part) + evals/golden_set.jsonl every version must pass before
+               release.
+     NUMBERS: A/B: 10% of traffic to the candidate, hashed by user_id, not request.
+     WATCH: Templating is also an injection surface -- escape/strip delimiter sequences from
+            every injected value. Prompts as string literals in application code are invisible
+            in incident review. Frequent prompt edits silently destroy the cache prefix (8.2.5).
+     SUMMARY: Treat prompts as versioned artefacts (Git + a CHANGELOG explaining WHY + a
+              golden-set gate before release) so any output is traceable back to an exact
+              prompt_version, and when A/B testing hash by USER, not request, so one person gets
+              a consistent experience -- judge results on the eval harness plus cost/latency,
+              never on impressions.
+
+  N3. ADVANCED PROMPTING & RELIABILITY                       [8.2.7]
+     WHERE: Used only after the four core techniques (step 6) aren't enough on hard cases.
+     WHY NOT A STEP: Not triggered this run -- a plain structured-CoT calculation didn't need
+                     extra orchestration.
+     TOOLS: Tree-of-Thought (branch/score/prune); step-back prompting (general principle first);
+            automatic prompt engineering / APE (generate+score candidates against a golden set);
+            prompt debiasing (vary irrelevant surface details); prompt ensembling (combine
+            differently-worded prompts, vs self-consistency which samples the SAME prompt); LLM
+            self-evaluation (rubric critique); calibration (confidence vs real accuracy).
+     REMEMBER: Each method trades extra cost/latency/orchestration for reliability on hard
+               cases, not a default toolkit. Ensembling catches prompt-wording risk;
+               self-consistency catches sampling risk -- different problems.
+     NUMBERS: Senior metrics: branch win rate, judge agreement, extra latency/cost per
+              successful answer, APE candidate distribution, validation-vs-training score gap,
+              ensemble disagreement, self-evaluation catch rate, calibration curve/ECE,
+              human-review overturn rate.
+     WATCH: Tree-of-Thought search with no judge multiplies cost without improving answers. APE
+            with no eval set, or no retest after model changes. "Are you sure?" is not a rubric.
+            An uncalibrated confidence signal should not be used for automation.
+     SUMMARY: Reach for Tree-of-Thought, step-back, APE, debiasing, ensembling, self-evaluation or
+              calibration only after the four core techniques aren't enough, since each trades
+              extra cost/latency/orchestration for reliability on hard cases -- and never trust a
+              technique without measuring it (a judge for ToT branches, an eval set for APE, real
+              calibration for confidence scores), or the extra machinery just multiplies cost.
 ```
 
 ### Every step, unpacked — the crux of each topic, as points, in execution order

@@ -5731,37 +5731,418 @@ every nightly run. They are not chosen again on each call:
   semantic reranker. If you switch to pgvector, those three things become parts you build and run
   yourself. That is still a valid path, and can be much cheaper if you already run Postgres.
 
-```
+```text
 USER (Ali, Grade B): "Can I carry over unused leave?"
 
+HOW TO SKIM THIS MAP
+  DO       = what runs
+  TOOLS    = techniques / frameworks / implementation pieces
+  REMEMBER = the main exam / interview point
+  NUMBERS  = values worth memorising
+  WATCH    = failure mode or control you must not miss
+
  A. INDEX-TIME (already done, nightly)
-    1. crawl SharePoint with a delta query; capture ACLs [8.3.1.1 / 8.3.1.2]
-    2. scanned Arabic PDFs -> Document Intelligence      [8.3.1.3 / 8.3.1.4]
-    3. split by layout, 512 tokens, parent = section     [8.3.2]
-    4. add contextual header and metadata                [8.3.2]
-    5. embed with fixed multilingual model, 1024 dims    [8.3.3]
-    6. upsert into HNSW index with filterable ACLs       [8.3.4]
-    7. propagate deletions and permission changes        [8.3.9]
+
+  A1. CRAWL WITH DELTA QUERY; CAPTURE ACLS                  [8.3.1.1 / 8.3.1.2]
+     DO: Pull docs + ACLs + metadata from source systems; process only what changed.
+     TOOLS: Graph API (SharePoint); SMB crawl; vendor APIs; Azure AI Search indexers;
+            delta query/change feed; timestamp watermark; content hash.
+     THIS RUN: SharePoint delta query pulls changed HR policy docs with ACLs, site, modified date.
+     REMEMBER: Metadata not captured now cannot be rebuilt later without a full re-crawl.
+               Change feed (best, catches deletions) > watermark (misses deletions) >
+               hash (catches all, still reads everything).
+     NUMBERS: Delta-query pipeline ~20 min vs re-scan-everything ~14 hours.
+     WATCH: Service account with broad read access; watermark advances on failure -> documents
+            silently skipped forever; no dead-letter queue.
+     SUMMARY: Capture every field that matters later (ACLs, modified date, department,
+              classification) during the crawl itself, using a delta query/change feed so
+              deletions are caught -- metadata skipped now cannot be added back without
+              re-crawling the whole corpus, and a service account with broad read access turns
+              the index into a permission-bypass copy of the source.
+
+  A2. OCR + LAYOUT FOR SCANS AND ARABIC PDFS                [8.3.1.3 / 8.3.1.4]
+     DO: Turn files into clean text + structure: OCR, layout analysis, table extraction.
+     TOOLS: Azure AI Document Intelligence; Textract; pypdf/pdfplumber; python-docx;
+            Tesseract/PaddleOCR.
+     THIS RUN: Scanned Arabic PDF -> Document Intelligence keeps tables structured, RTL correct.
+     REMEMBER: Extraction quality is a HARD CEILING on retrieval quality; nothing downstream fixes it.
+               Arabic needs 7 fixes: Arabic-trained OCR, RTL handling, tashkeel normalization,
+               bilingual-column splitting, token-based sizing, tested multilingual embeddings,
+               cross-lingual query handling. Same normalization on docs AND queries, or it is
+               worse than none.
+     NUMBERS: Arabic uses ~2-3x the tokens of English for the same meaning.
+     WATCH: Flattened tables ("Grade Days A 24 B 30 C 35") -- most common silent RAG failure.
+            English-tuned OCR on Arabic scans -- nobody notices until an Arabic speaker tests it.
+     SUMMARY: Extraction quality is a hard ceiling nothing downstream can lift -- flattened
+              tables and English-tuned OCR on Arabic scans are the two most common silent
+              failures, so budget real time here and apply identical normalization to both
+              documents and queries.
+
+  A3. SPLIT BY LAYOUT, 512 TOKENS, PARENT = SECTION         [8.3.2]
+     DO: Chunk documents into retrievable units without cutting an idea in half.
+     TOOLS: RecursiveCharacterTextSplitter + tiktoken; SemanticSplitterNodeParser; layout-aware
+            split on Document Intelligence output; ParentDocumentRetriever (parent-child).
+     THIS RUN: Layout-aware split on headings/sections, 512 tokens, ~50 overlap, parent = section.
+     REMEMBER: The chunk IS the unit of retrieval -- nothing downstream recovers info cut in half.
+               4 strategies: fixed (baseline only) < recursive (default) < semantic (costly) <
+               layout-aware (best for structured policy docs).
+               Parent-child = search small precise children, send the larger parent to the model.
+     NUMBERS: Small chunks 200-300 tok (precise, context-poor); large 1,000-1,500 tok
+              (self-contained, vague embedding); overlap 10-20% (~50 tok at 512);
+              contextual header 10-30 tok/chunk.
+     WATCH: Splitting a table (most common silent failure); sizing in characters on a multilingual
+            corpus (Arabic ~40% of English content at same char count); chunking change = full
+            re-index.
+     SUMMARY: The chunk IS the unit of retrieval, so layout-aware splitting at ~512 tokens with
+              parent-child (small precise child for search, larger parent for the model) gives
+              both precision and context -- never split a table, size in tokens not characters
+              for Arabic, and any chunking change forces a full re-index.
+
+  A4. ADD CONTEXTUAL HEADER AND METADATA                    [8.3.2]
+     DO: Prefix each chunk with doc/section title before embedding; attach permission + citation
+         fields.
+     TOOLS: embed_text (header + text, embedded) vs text (plain, shown to model) -- separate fields.
+     THIS RUN: "HR Policy Manual 2026 > Section 4.2 Annual Leave > Grade A-24 | B-30 | C-35".
+     REMEMBER: Every metadata field has a later owner: acl_groups -> 8.3.5.8; effective_from/
+               superseded -> 8.3.9; classification -> DLP 8.6.13; source_url/page -> citations 8.3.6.
+     NUMBERS: Contextual header costs 10-30 tokens per chunk.
+     WATCH: Metadata not added now cannot be added later without a full re-crawl + re-index.
+            Chunk-level ACLs drifting from source ACLs is how permission trimming quietly fails.
+     SUMMARY: Prefix each chunk with its document/section title before embedding (embed_text vs
+              plain text as separate fields) and attach every metadata field with a clear later
+              owner -- acl_groups, effective_from/superseded, classification, source_url --
+              because none of it can be added after the fact without a full re-crawl.
+
+  A5. EMBED WITH FIXED MULTILINGUAL MODEL, 1024 DIMS        [8.3.3]
+     DO: Turn each chunk into a dense vector; similar meaning = close vectors (cosine).
+     TOOLS: OpenAI/Azure AI/Cohere hosted embeddings; sentence-transformers/ONNX for local/open
+            models.
+     THIS RUN: Multilingual model, 1,024 dims, pinned version stored in index metadata.
+     REMEMBER: Model + version + dimensions must be IDENTICAL at index and query time -- pin it and
+               assert_compatible() at startup. Choose by language coverage first, tested on YOUR corpus.
+     NUMBERS: "annual leave entitlement" vs "vacation days policy" = 0.87; vs Arabic equivalent =
+              0.81 cross-lingual; vs unrelated text = 0.11. Storage 400k x 1,024 x 4B ~ 1.6 GB.
+              Initial embed ~$3.20 once; queries ~$0.07/month; re-embed ~$3.20 per migration.
+     WATCH: Model/version mismatch between index and query -> NO ERROR, just meaningless random
+            retrieval. Treating a similarity threshold (e.g. 0.75) as portable across models.
+     SUMMARY: Pin the embedding model, version and dimensions in index metadata and assert
+              compatibility at startup, since a mismatch between index-time and query-time
+              embeddings gives NO ERROR, just meaningless random retrieval -- choose the model by
+              tested Arabic performance first, never a leaderboard.
+
+  A6. UPSERT INTO HNSW INDEX WITH FILTERABLE ACLS           [8.3.4]
+     DO: Index vectors for approximate nearest neighbour search, with filter fields for permissions.
+     TOOLS: Azure AI Search (HNSW, built-in fusion + reranker); PostgreSQL + pgvector (cheaper,
+            build-your-own fusion/reranker); GIN indexes for filter fields in Postgres.
+     THIS RUN: HNSW index; acl_groups, department, effective_from, superseded, language filterable.
+     REMEMBER: HNSW = default choice (handles incremental inserts, no training data, fast queries).
+               IVFFlat only when memory is tight or corpus is static (recall drops on inserts).
+               Filtered search (vector + structured predicate) is what makes permission trimming
+               possible.
+     NUMBERS: m=16-64 connections/node; ef_construction=100-400; ef_search=40-200 (the runtime
+              recall/latency dial). Graph overhead ~1.5-2x raw vector size (~1.6GB raw, ~3GB w/graph).
+     WATCH: Filter fields not indexed -> selective filter becomes a full scan, 100ms budget gone.
+            In-process stores (FAISS/Chroma) lack the concurrency/durability production needs.
+     SUMMARY: HNSW is the default vector index because it handles incremental inserts well, but
+              filtered search (vector similarity plus ACL/department/superseded predicates) is
+              what actually makes permission trimming possible -- unindexed filter fields turn a
+              selective filter into a full scan and blow the latency budget.
+
+  A7. PROPAGATE DELETIONS AND PERMISSION CHANGES            [8.3.9]
+     DO: Handle 3 change-feed event types: created/modified, deleted, permissions-changed.
+     TOOLS: delete-then-insert (never merge -- re-chunking may change chunk count); cache purge;
+            effective_from/effective_to/superseded_by supersession fields.
+     THIS RUN: Default retrieval filter: superseded eq false and effective_from le now().
+     REMEMBER: Permissions-changed events update acl_groups with NO content change -- the row most
+               pipelines miss, and it is a security control, not a quality control.
+               Soft delete is not enough for right-to-erasure -- the vector must be removed too.
+     WATCH: Deletions not propagated -> withdrawn policies cited as current (worst failure for a
+            policy assistant). Permission changes not propagated -> quiet ongoing access breach.
+     SUMMARY: The change feed must handle all three event types -- created/modified, deleted, and
+              permissions-changed with no content change -- because the permissions-changed row
+              is the one most pipelines miss, and undetected deletions mean withdrawn policies
+              keep getting cited as current.
 
  B. QUERY-TIME
-    1. resolve Ali's transitive principals from Entra ID [8.3.5.8]
-       -> fail closed if this cannot be established
-    2. rewrite: "Can unused annual leave be carried over
-       to the following year?"                          [8.3.5.3]
-    3. embed the rewritten query with the SAME model     [8.3.3]
-    4. hybrid search WITH pre-filter:
-         acl_groups intersect principals, superseded = false [8.3.5.1 / 8.3.5.8]
-       -> 50 candidates
-    5. fuse BM25 + vector with RRF                       [8.3.5.1]
-    6. cross-encoder rerank 50 -> 8, relevance floor 0.3 [8.3.5.2]
-    7. re-check permissions after parent expansion       [8.3.5.8]
-    8. nothing above the floor? abstain in code          [8.3.6]
-    9. place chunks: best first, second-best last        [8.2.4]
-   10. generate with grounding prompt + nullable schema  [8.3.6]
-   11. check every quote appears in its cited chunk      [8.3.6]
-   12. return answer + citations linking to SharePoint   [8.3.6]
-   13. audit: who asked what, which chunks               [8.3.5.8 / 8.6.6]
-   14. record metrics for online evaluation              [8.3.8]
+
+  B1. RESOLVE ALI'S TRANSITIVE PRINCIPALS; FAIL CLOSED      [8.3.5.8]
+     DO: Resolve the asking user's effective permissions from the identity provider, at query time.
+     TOOLS: Entra ID / identity provider; transitive group resolution; short-TTL cache (1-5 min).
+     THIS RUN: Ali's groups resolved transitively (HR-Team -> All-Staff); used as pre-filter in B4.
+     REMEMBER: THE main topic of this file. Enforcement belongs in retrieval, not final display --
+               once content enters the context window it can be summarized/leaked past any output
+               filter. Direct-membership-only check causes under-permissioning (can't find what
+               they can open in SharePoint).
+     NUMBERS: Cache principals 1-5 min TTL; every cached minute = one minute of stale access
+              post-revoke.
+     WATCH: FAIL CLOSED if principals can't be resolved -- retrieve nothing, never fail open.
+            A hardcoded default group or "except: pass" around the directory call silently
+            grants everything.
+     SUMMARY: This is the file's main topic -- resolve the asking user's transitive permissions
+              from the identity provider at query time and enforce them as a pre-filter INSIDE
+              retrieval, never after, and FAIL CLOSED on any resolution failure, since an
+              unfiltered result is a breach while an empty one is just a service failure.
+
+  B2. REWRITE THE QUERY                                     [8.3.5.3]
+     DO: Turn pronouns/history into a standalone question.
+     TOOLS: small-model rewrite call; expansion (synonyms, bilingual terms); multi-query
+            (3-5 phrasings, union results); HyDE (embed a generated hypothetical answer --
+            never shown to the user).
+     THIS RUN: "What about carry-over?" -> "Can unused annual leave be carried over to next year?"
+     REMEMBER: Essential in multi-turn chat -- a raw follow-up has little meaning alone.
+     NUMBERS: Rewrite ~100-300ms, one small-model call. Multi-query = 3-5x retrieval cost
+              (cheap, since retrieval isn't the expensive part).
+     WATCH: No rewriting in chat -> follow-ups retrieve nothing useful.
+     SUMMARY: Turn a raw follow-up into a standalone question before embedding it, since a
+              pronoun-laden question has little meaning alone -- expansion, multi-query and HyDE
+              are nearby techniques for synonym, recall and vague-query problems respectively, and
+              HyDE's hypothetical answer is a search probe only, never shown to the user.
+
+  B3. EMBED THE REWRITTEN QUERY, SAME MODEL                 [8.3.3]
+     DO: Embed the query with identical model/version/dims/normalization as the index.
+     TOOLS: same embedding client/model pinned at A5.
+     THIS RUN: Query embedded, 10-50ms, included in the latency budget.
+     REMEMBER: Any mismatch with the index model gives NO ERROR -- just meaningless scores.
+     WATCH: assert_compatible() (from A5) turns a mismatch into a loud startup crash instead of
+            silent bad retrieval.
+     SUMMARY: Embed the rewritten query with the exact same model/version/dimensions/
+              normalization as the index, because any mismatch produces no error, only
+              meaningless similarity scores -- the assert_compatible() guard from A5 is what
+              turns that silent failure into a loud one.
+
+  B4. HYBRID SEARCH WITH ACL PRE-FILTER -> 50 CANDIDATES    [8.3.5.1 / 8.3.5.7 / 8.3.5.8]
+     DO: Vector + BM25 search, filtered to acl_groups intersect principals AND superseded=false,
+         BEFORE ranking.
+     TOOLS: Azure AI Search hybrid query; BM25 (keyword); vector (ANN); OData/SQL WHERE filter.
+     THIS RUN: 50 candidates returned, all already permission-filtered and not superseded.
+     REMEMBER: BM25 finds exact IDs/codes/names, misses paraphrase/cross-lingual. Vector finds
+               paraphrase/cross-lingual, misses exact identifiers. Use both.
+               PRE-filter (correct: search only the permitted set) vs POST-filter (wrong for
+               security: search everything, drop forbidden after -- leaks into logs/traces,
+               ranks over unseen docs).
+     NUMBERS: Retrieve wide 30-100 candidates (this run 50); candidate count is the recall ceiling.
+     WATCH: Post-filtering for permissions is never acceptable -- unpredictable top-up behavior,
+            restricted content already read into logs/caches, ranking leaks existence of hidden docs.
+     SUMMARY: Combine BM25 (exact IDs/codes) and vector (paraphrase/cross-lingual) search with the
+              ACL and supersession filter applied INSIDE the query, retrieving wide (30-100
+              candidates) since the reranker can never recover a document that was never
+              retrieved -- post-filtering for permissions leaks restricted content into logs and
+              ranks over documents the user can't see.
+
+  B5. FUSE BM25 + VECTOR WITH RRF                           [8.3.5.1]
+     DO: Combine the two ranked lists by RANK, not raw score.
+     TOOLS: Reciprocal Rank Fusion.
+     THIS RUN: RRF_score = sum of 1/(k + rank) across both lists, k=60.
+     REMEMBER: BM25 and cosine scores aren't on the same scale -- score-based fusion needs fragile
+               normalization; rank-based fusion doesn't. Consistent-in-both beats spiky-great-in-one.
+     NUMBERS: k=60 (rarely worth tuning). Rank1+rank9 -> 0.0309; rank3+rank3 -> 0.0318.
+     WATCH: Fusing by raw score instead of rank.
+     SUMMARY: Fuse the two ranked lists by RANK using Reciprocal Rank Fusion (k=60), not raw
+              score, because BM25 and cosine scores aren't on the same scale and
+              consistent-in-both beats spiky-great-in-one.
+
+  B6. CROSS-ENCODER RERANK 50 -> 8, FLOOR 0.3               [8.3.5.2]
+     DO: Score [query+chunk] together for real relevance; keep only chunks above the floor.
+     TOOLS: Azure AI Search semantic ranker; Cohere Rerank; bge-reranker-v2-m3 (multilingual/
+            Arabic, self-hosted); LLM-as-reranker (accurate but slow/expensive, usually not worth
+            it).
+     THIS RUN: Carry-over chunk was BM25 rank1/vector rank~9 -> reranked to rank1, score 0.94.
+     REMEMBER: Bi-encoder (index-time, query and chunk never "see" each other) vs cross-encoder
+               (query-time, reads both together) -- two-stage pattern: cheap recall, then
+               expensive precision. Often the single best upgrade to a RAG system.
+     NUMBERS: Relevance floor 0.3 -- below it, return nothing (noise causes hallucination).
+              Rerank latency 50-300ms for 30 candidates -- the main latency cost of the pipeline.
+     WATCH: No reranking -> topically-similar beats actually-answering, right chunk buried at rank 9.
+            Returning top-k regardless of score -> guaranteed irrelevant context, directly causes
+            hallucination.
+     SUMMARY: A cross-encoder reads query and chunk TOGETHER to score real relevance -- often the
+              single best upgrade to a RAG system -- and anything below the 0.3 relevance floor
+              is dropped entirely, since noise causes hallucination and returning top-k
+              regardless of score guarantees it on out-of-scope questions.
+
+  B7. RE-CHECK PERMISSIONS AFTER FUSION/EXPANSION           [8.3.5.8]
+     DO: Re-verify permissions after any step that can put a document back in: fusion, rerank,
+         multi-query union, parent-child expansion, cache.
+     TOOLS: same ACL filter re-applied to the parent chunk before sending it to the model.
+     THIS RUN: Parent section re-checked against Ali's principals before generation.
+     REMEMBER: Pre-filtering (B4) is necessary but not sufficient by itself.
+               7-layer model: source ACLs -> ingestion copy+resync -> retrieval pre-filter
+               (THE control) -> re-check after fusion/rerank/expansion/cache -> generation only
+               sees permitted content -> citations link to source (re-checks again) -> audit log.
+     WATCH: Parent-child expansion without re-checking (parent may have a broader permission scope
+            than the permitted child). Testing only with an admin account -- everything passes,
+            nothing is tested.
+     SUMMARY: Pre-filtering alone isn't enough -- fusion, reranking, multi-query and especially
+              parent-child expansion can all put a document back into the candidate set, so
+              re-verify permissions on the actual content (the parent, not just the matched
+              child) right before it reaches the model, and always test with a restricted
+              account, not an admin one.
+
+  B8. NOTHING ABOVE FLOOR -> ABSTAIN IN CODE                [8.3.6]
+     DO: If nothing clears the relevance floor, return "no answer" WITHOUT calling the model.
+     TOOLS: code-level check before the generation call.
+     THIS RUN: Not triggered -- carry-over chunk scored 0.94, well above floor.
+     REMEMBER: Two different cases: "no documents found" (retrieval bug) vs "documents found but
+               don't answer this" (correct behavior) -- log them separately.
+     NUMBERS: Healthy abstention rate on real traffic: 5-20%.
+     WATCH: Calling the model on an empty candidate set = paid, guaranteed hallucination.
+            Tuning abstention to zero removes the system's only honest behavior.
+     SUMMARY: If nothing clears the relevance floor, abstain in code before spending a single
+              token -- calling the model on an empty candidate set is paid, guaranteed
+              hallucination -- and a healthy system abstains 5-20% of the time, so driving
+              abstention to zero usually means the system's only honest behavior was removed.
+
+  B9. PLACE CHUNKS: BEST FIRST, SECOND-BEST LAST            [8.2.4]
+     DO: Order chunks for attention: best first, second-best last, weaker ones in the middle;
+         question last.
+     TOOLS: Stage 2 context-box placement rules, reused unchanged.
+     THIS RUN: 8 reranked chunks arranged best-first/second-best-last; question appended last.
+     REMEMBER: Fewer, better chunks beat more chunks -- use 3-8 after reranking.
+     WATCH: More chunks dilutes context; too few starves the answer.
+     SUMMARY: Reuse Stage 2's placement rule unchanged -- best chunk first, second-best last,
+              question last of all -- and keep it to 3-8 chunks after reranking, since more
+              chunks dilute context and too few starve the answer.
+
+  B10. GENERATE WITH GROUNDING PROMPT + NULLABLE SCHEMA     [8.3.6]
+     DO: Force the model to answer ONLY from numbered sources, cite per sentence, quote exact
+         text, return null if not present.
+     TOOLS: structured output schema with nullable `answer` + boolean `sufficient_context`.
+     THIS RUN: Grounded answer generated citing the [2] carry-over chunk, same language as asked.
+     REMEMBER: Weak grounding ("use the following documents") lets the model blend in outside
+               knowledge. Strong grounding (ONLY from these sources / cite id / quote / null if
+               absent) stops blending, misattribution, and answering-anyway.
+     NUMBERS: Temperature 0-0.2.
+     WATCH: Answering in the wrong language (fix: "answer in the same language as the question").
+     SUMMARY: Force the model to answer ONLY from numbered sources, cite per sentence, quote the
+              exact text, and return null when the sources don't answer the question -- weak
+              grounding lets the model blend in outside knowledge, and the four grounding
+              elements together stop blending, misattribution, and answering-anyway.
+
+  B11. CHECK EVERY QUOTE APPEARS IN ITS CITED CHUNK         [8.3.6]
+     DO: String-match each quoted span against its cited chunk; fail closed if it doesn't match.
+     TOOLS: cheap string match (citation presence + quote verification, free); LLM/service
+            groundedness check (entailment, one extra call); self-consistency sampling (n x cost).
+     THIS RUN: Both free checks pass on every request; groundedness sampled since this is HR policy.
+     REMEMBER: Span-level citations (exact quoted sentence) are strongest because they're
+               verifiable -- document-level and chunk-level citations can't be checked this way.
+     NUMBERS: Run groundedness on 5-10% of normal traffic + all high-stakes answers; threshold
+              0.7-0.8.
+     WATCH: A fake citation is worse than no answer -- it is more persuasive. Fail closed on a
+            failed check.
+     SUMMARY: String-match every quoted span against its cited chunk on every request (free),
+              since span-level citations are the only kind that's actually verifiable, and run
+              groundedness checks on high-stakes answers plus a traffic sample -- a fake citation
+              is worse than no answer because it is more persuasive.
+
+  B12. RETURN ANSWER WITH CITATIONS LINKING TO SHAREPOINT   [8.3.6]
+     DO: Link every claim to its chunk, page, and source document (which re-checks access on open).
+     TOOLS: source_url/page metadata from A4.
+     THIS RUN: Answer returned with a citation link to HR Policy Manual section 4.2 in SharePoint.
+     REMEMBER: Link and summarize -- never copy whole documents into the answer.
+     WATCH: Copying full documents turns the assistant into an uncontrolled distribution channel
+            for content the source system was carefully governing.
+     SUMMARY: Link every claim back to its chunk, page, and source document (which re-checks
+              access when opened) instead of copying document text into the answer, since
+              copying turns the assistant into an uncontrolled distribution channel for content
+              the source system was carefully governing.
+
+  B13. AUDIT: WHO ASKED WHAT, WHICH CHUNKS                  [8.3.5.8 / 8.6.6]
+     DO: Log user_id, question, chunk_ids used, principal count, timestamp.
+     TOOLS: access-controlled audit/trace store.
+     THIS RUN: Ali's query and the chunks used are logged for later "who saw what" audit.
+     REMEMBER: This is what answers "who saw what?" after the fact.
+     WATCH: Logging retrieved content WITHOUT access control on the logs -- trimming worked, but
+            the data leaks through the trace store instead.
+     SUMMARY: Log user_id, question, chunk_ids used, principal count and timestamp on every
+              request so "who saw what?" always has an answer -- but the audit store itself needs
+              access control, or security trimming's success just gets undone by the trace store
+              leaking the same data.
+
+  B14. RECORD METRICS FOR ONLINE EVALUATION                 [8.3.8]
+     DO: Sample real traffic continuously; run cheap retrieval metrics on every commit; run
+         LLM-judged metrics nightly/on release candidates.
+     TOOLS: offline golden-set CI gate; online sampling; hit rate/recall/MRR (free, deterministic);
+            LLM-judged generation metrics (slower, noisier).
+     THIS RUN: This query's outcome (chunk used, not abstained) logged as evaluation data.
+     REMEMBER: Offline catches regressions on known cases; online catches drift, since real
+               questions move away from the golden set within weeks. You need both.
+               Failed verifications and abstentions are free labelled data -- feed them back into
+               the golden set.
+     NUMBERS: Abstention rate is a top operational metric -- a sudden drop usually means retrieval
+              broke and the model started guessing.
+     WATCH: Relying on offline-only eval misses real-world drift.
+     SUMMARY: Run free deterministic retrieval metrics (hit rate, recall, MRR) on every commit
+              and slower LLM-judged metrics nightly, sampling real traffic continuously since it
+              drifts from the golden set within weeks -- abstention rate is the top operational
+              signal, and every abstention or failed verification is free labelled data to feed
+              back into the golden set.
+
+  TOPICS THAT ARE PART OF THIS STAGE BUT NOT DIRECT STEPS IN THIS REQUEST
+
+  N1. ADVANCED RAG - SIX TECHNIQUES FOR SIX FAILURES        [8.3.7]
+     WHERE: Replaces/wraps the retrieve step, only after the golden set proves baseline fails.
+     WHY NOT A STEP: This request is answered by the baseline pipeline (hybrid+rerank+filter);
+                     no advanced technique is triggered.
+     TOOLS: GraphRAG (relational/global questions); Agentic RAG (unknown number of searches, model
+            decides); contextual retrieval (LLM-written chunk context, stronger than A4's header);
+            multi-hop (chained questions, retrieve->read->retrieve again); Table RAG (row/column
+            lookup instead of prose); SQL RAG/text-to-SQL (live numeric/aggregate totals).
+     REMEMBER: Adopt exactly ONE technique matching a failure the golden set proves. Each keeps
+               permission-aware retrieval, citations, and loop/hop caps; each falls back to
+               baseline or abstains when weak.
+     NUMBERS: Contextual retrieval = 1 LLM call per chunk at index time (400k chunks = real bill).
+              SQL RAG: read-only role, 5s timeout, 1,000-row limit, parsed is_select_only() check.
+     WATCH: Adopting any of these before the baseline is measured is expensive guesswork.
+            SQL RAG executed without parsing/validation is a critical vulnerability (8.6.1).
+     SUMMARY: Advanced RAG is six narrow fixes (GraphRAG, Agentic RAG, contextual retrieval,
+              multi-hop, Table RAG, SQL RAG) for six specific failures the baseline pipeline can't
+              handle -- adopt exactly one only after the golden set proves the failure, since
+              adopting any before the baseline is measured is expensive guesswork, and SQL RAG
+              needs a read-only, row-limited, parsed-and-validated execution path or it's a
+              critical vulnerability.
+
+  N2. RAG EVALUATION + GOLDEN QUESTION SET                  [8.3.8 / 8.3.8.10]
+     WHERE: Wraps the whole pipeline -- offline in CI as a gate, online as continuous sampling.
+     WHY NOT A STEP: Only B14's metric record happens per-request; scoring/gating runs in CI and
+                     nightly, not inside this trace.
+     TOOLS: RAGAS; Azure AI Evaluation SDK; DeepEval; TruLens; promptfoo; LangSmith/Azure AI
+            Foundry tracing.
+     REMEMBER: Split retrieval metrics (context recall/precision) from generation metrics
+               (faithfulness/answer relevance) -- an unsupported answer needs a different fix
+               depending on which is low. Build the golden set BEFORE tuning anything.
+               Composition: ~40% lookups, ~15% multi-chunk, ~15% unanswerable (should_abstain),
+               ~10% exact identifiers, ~15% Arabic/bilingual, ~5% permission-sensitive.
+     NUMBERS: CI gate: hit_rate>=0.90, recall>=0.85. Targets: hit rate>0.90, context recall>0.85,
+              faithfulness>0.90. Golden set: 50 to start, 200-500 working; re-review quarterly.
+     WATCH: One aggregate quality number hides which half is broken. Evaluating only as an admin
+            user makes permission failures structurally invisible. A stale golden set reports
+            confident passes on wrong (superseded) answers.
+     SUMMARY: Split retrieval metrics from generation metrics so a bad score points to the right
+              fix, and build the golden set (real traffic + abstentions + SME questions, weighted
+              toward unanswerable/Arabic/permission-sensitive cases) BEFORE tuning anything, since
+              one aggregate quality number or an admin-only eval run hides exactly the failures
+              that matter in a government deployment.
+
+  N3. RETRIEVAL CACHING                                     [8.3.10]
+     WHERE: Wraps the trace -- embedding/rewrite caches sit before B2/B3; answer cache sits after
+            B12.
+     WHY NOT A STEP: Not shown in this trace because it is optional infrastructure around the
+                     steps, and the answer-cache layer is deliberately NOT in the default path.
+     TOOLS: Redis/Azure Cache for Redis; GPTCache; LangChain caches (app-level -- Azure AI Search
+            does not cache for you).
+     REMEMBER: 3 layers, safest to riskiest: embedding cache (identity-independent, safe) ->
+               exact-match answer cache (must key on PERMISSION CLASS, not raw principal set) ->
+               semantic cache (highest risk -- near-duplicate questions can leak across users).
+               Permission class = sorted(user_principals & acl_groups_used_in_corpus).
+     NUMBERS: Semantic-cache similarity threshold must be deliberately high, ~0.97 (0.90 will
+              serve wrong answers to subtly different questions).
+     WATCH: Keying the answer cache on question text alone serves Ali's permitted answer to
+            Fatima. Caching abstentions hides a fixed retrieval bug behind a stale "I don't know".
+     SUMMARY: Cache embeddings and rewrites freely since they're identity-independent, but key any
+              answer cache on the PERMISSION CLASS (not the raw principal set, not the question
+              alone) and keep the semantic-cache similarity threshold deliberately high (~0.97),
+              because a naive question-only cache key serves one user's permitted answer to
+              another user with a high hit rate.
 ```
 
 ### Every Step Explained - Main Point, In Run Order

@@ -1456,39 +1456,297 @@ numbers and its failure mode inline.
   "it's just logs", the trace store becomes a shadow database of HR records with broad developer
   access.
 
-```
+```text
 CHANGE: replace the reranker and update the grounding prompt.
 
- 1. CREATE A CANDIDATE CONFIG WITH PINNED VERSIONS                [8.5.7]
-    prompt · model route · embedding+index · tool schema · eval baseline
-    → one change at a time, or attribution is impossible          [8.5.10]
+HOW TO SKIM THIS MAP
+  DO       = what runs
+  TOOLS    = techniques / frameworks / implementation pieces
+  REMEMBER = the main exam / interview point
+  NUMBERS  = values worth memorising
+  WATCH    = failure mode or control you must not miss
+  SUMMARY  = the one thing to keep long-term if you forget everything else
 
- 2. RUN DETERMINISTIC RETRIEVAL METRICS IN CI            [8.5.1 / 8.5.2]
-    hit rate · recall · precision · MRR · citation quote check
-    → free and fast, so every commit
+  1. CREATE A CANDIDATE CONFIG WITH PINNED VERSIONS         [8.5.7 / 8.5.10]
+     DO: Bundle prompt + model route + embedding/index + tool schema + eval baseline into one
+         versioned candidate config; change ONE thing at a time.
+     TOOLS: Versioned config file (app_version, prompt_version, model_route,
+            embedding.model+index, reranker, tool_schema_version, eval_baseline); deployment
+            naming, not model naming.
+     THIS RUN: Candidate = new reranker + updated grounding prompt -- two changes bundled
+               deliberately, tracked as one release unit.
+     REMEMBER: The release unit is the BUNDLE, not any single artifact, because the four
+               artifacts' behaviour is coupled. One-change rule: don't change model + prompt +
+               chunking + top-k together unless deliberately shipping a controlled bundle, or you
+               won't know why metrics moved.
+     WATCH: Model names hardcoded across services instead of calling deployments. An embedding
+            model change that doesn't trigger re-embedding/index versioning -- query and index
+            vectors land in different spaces, nothing errors, retrieval goes silently random. A
+            tool schema change invalidating both prompt caching and tool-selection accuracy.
+     SUMMARY: Treat a release as one versioned bundle (prompt, model route, embedding/index, tool
+              schema, eval baseline) and change only what you mean to change at once, because
+              these four artifacts' behaviour is coupled -- an embedding change without
+              re-embedding/index versioning silently randomizes retrieval with no error, and
+              stacking changes together destroys your ability to attribute a metric move to a
+              cause.
 
- 3. RUN THE FULL LLM-JUDGED EVAL NIGHTLY / PRE-RELEASE            [8.5.1]
-    faithfulness · relevance · coherence · correct abstention
-    → slower, noisier, costs money; judge biases handled
+  2. RUN DETERMINISTIC RETRIEVAL METRICS IN CI              [8.5.1 / 8.5.2]
+     DO: Run free, fast checks (schema, citation quote check, forbidden chunk, tool args, hit
+         rate, recall, precision, MRR) against the production path on every commit.
+     TOOLS: CI eval harness; golden dataset rows carrying as_user + must_not_retrieve;
+            deterministic scorers.
+     THIS RUN: Candidate config run through the CI gate before anything nightly or pre-release
+               happens.
+     REMEMBER: The gate asserts thresholds AND zeros: retrieval_hit_rate_at_8>=0.90,
+               context_recall>=0.85, faithfulness>=0.90, correct_abstention_rate>=0.90,
+               permission_leak_count==0. The harness must run the REAL auth, filters and prompt
+               assembly -- a harness that mocks retrieval tests a system that doesn't exist.
+               Every golden row needs as_user or permission failures are structurally invisible.
+     NUMBERS: permission_leak_count == 0 is a hard zero, not a tunable threshold.
+     WATCH: Thresholds lowered to make a build green -- the metric now measures nothing. Only
+            happy-path answerable questions, which rewards hallucination because guessing scores
+            well.
+     SUMMARY: Run the free, fast, deterministic checks (schema, citation, hit rate/recall/MRR)
+              through the real production path on every commit, gated on both thresholds and
+              hard zeros like permission_leak_count==0 -- without as_user on every golden row,
+              permission failures are structurally invisible, and a harness that mocks retrieval
+              or auth is testing a system that doesn't exist.
 
- 4. COMPARE QUALITY, SAFETY, LATENCY AND COST TO BASELINE
-    the whole scorecard, segmented        [8.5.2 / 8.5.3 / 8.5.4]
-    → a 3% quality gain at 40% more cost is a decision, not a win
+  3. RUN THE FULL LLM-JUDGED EVAL NIGHTLY / PRE-RELEASE      [8.5.1]
+     DO: Run the slower, costlier LLM-judged metrics (faithfulness, relevance, coherence, correct
+         abstention) nightly and before release, with judge biases controlled for.
+     TOOLS: LLM-as-judge scorers; length-normalized rubric; randomized pairwise order;
+            independent/calibrated judge model; bilingual judge set + human calibration.
+     THIS RUN: Candidate scored on faithfulness/relevance/coherence/abstention against the golden
+               set, judge blind to the gold answer.
+     REMEMBER: Five named judge biases: verbosity, position, self-preference, style, language --
+               each needs its own countermeasure. Never use an LLM judge as the ONLY gate for
+               security-sensitive behaviour -- those stay deterministic checks with a threshold
+               of zero. Never let the judge see the gold answer when measuring faithfulness, or
+               it leaks correctness into a score meant to measure support-by-context.
+     NUMBERS: Four evaluation modes: offline (release gates, dataset goes stale), online (sampled
+              production, drift detection), human review (high-stakes, expensive), pairwise
+              (A vs B).
+     WATCH: Outputs scored but traces not saved, so failures can't be debugged afterwards.
+     SUMMARY: Score faithfulness, relevance, coherence and abstention with an LLM judge nightly
+              and pre-release, actively countering its five known biases (verbosity, position,
+              self-preference, style, language) and never letting it see the gold answer while
+              judging faithfulness -- and never let a judge alone gate anything
+              security-sensitive, since that needs a deterministic zero-threshold check instead.
 
- 5. RUN RED-TEAM AND PERMISSION-SENSITIVE CASES           [8.6.10 / 8.5.1]
-    permission_leak_count == 0 is a ZERO, not a threshold
+  4. COMPARE QUALITY, SAFETY, LATENCY AND COST TO BASELINE   [8.5.2 / 8.5.3 / 8.5.4]
+     DO: Read the whole scorecard against baseline, segmented across 8 dimensions, in diagnostic
+         pairs rather than as averages.
+     TOOLS: Diagnostic pattern table (recall+faithfulness pairs point to retrieval vs generation
+            fixes); segmentation by language/tenant/channel/feature/model route/prompt
+            version/document source/user role; latency read at p95/p99 per stage; cost read with
+            full attribution (cached input, reasoning, embedding, reranker, agent step
+            multiplier).
+     THIS RUN: New reranker + grounding prompt compared to baseline across quality, safety,
+               latency, cost, segmented by language to check Arabic didn't regress.
+     REMEMBER: Read metrics in PAIRS, never as an average, and segment by all 8 dimensions or
+               averages lie -- the classic bilingual trap is overall quality rising while Arabic
+               quality falls underneath it. A 3% quality gain at 40% more cost is a DECISION, not
+               an automatic win.
+     NUMBERS: Rerank 50-300ms/30 candidates; retrieval <100ms target; agent step cost multiplier
+              10-50x. The worked trap: faithfulness 0.89->0.95 while abstention 8%->22% -- only
+              the unanswerable set plus human review can tell if that's correct or
+              over-conservative.
+     WATCH: Cost and latency missing from the scorecard, so an expensive change ships without
+            anyone deciding. Cached tokens untracked, so broken prompt caching is invisible --
+            nothing errors, the bill just stops falling.
+     SUMMARY: Read the whole scorecard (quality, safety, latency, cost) against baseline in
+              diagnostic pairs and segmented across 8 dimensions, never as one average, since a
+              bilingual system can show rising overall quality while Arabic quality falls
+              underneath it -- and treat a quality gain bought with a big cost or abstention
+              swing as a decision requiring the unanswerable set and human review, not an
+              automatic win.
 
- 6. SHADOW ON SAMPLED PRODUCTION TRAFFIC                          [8.5.7]
-    candidate runs, user sees the old output → no user risk
+  5. RUN RED-TEAM AND PERMISSION-SENSITIVE CASES            [8.6.10 / 8.5.1]
+     DO: Run the red-team suite and permission-sensitive golden cases as part of the SAME release
+         gate as quality.
+     TOOLS: Red-team regression suite (Stage 5); permission-sensitive golden rows.
+     THIS RUN: Candidate config run against the same adversarial and permission-sensitive cases
+               used every release.
+     REMEMBER: Stage 5's controls become Stage 6's measurements -- a control without a
+               measurement is an assertion, not a fact. Score OUTCOMES not blocked/not-blocked:
+               correct abstention, safe refusal, routed-to-human all count as successes; unsafe
+               answer, unauthorized tool call, disclosure, excessive cost are failures.
+     NUMBERS: permission_leak_count == 0, same hard zero as step 2.
+     WATCH: A prompt change silently regressing a safety control, which is exactly why red-team
+            pass rate belongs IN the same gate as quality, not in a separate quarterly exercise.
+     SUMMARY: Run the red-team and permission-sensitive suites in the SAME gate as quality every
+              release, scoring outcomes (safe refusal, correct abstention count as wins) rather
+              than blocked/not-blocked, because Stage 5's controls only become real once they're
+              measured here -- a safety regression caught quarterly instead of per-release is a
+              safety regression that already shipped.
 
- 7. CANARY TO 5-10% IF SHADOW IS CLEAN                            [8.5.7]
-    hash the USER, not the request
+  6. SHADOW ON SAMPLED PRODUCTION TRAFFIC                   [8.5.7]
+     DO: Run the candidate in parallel on sampled real traffic while the user still sees the old
+         output.
+     TOOLS: Shadow deployment infrastructure; sampled request duplication.
+     THIS RUN: Reranker+prompt candidate shadow-run against real HR queries with zero
+               user-facing risk.
+     REMEMBER: Real traffic, real distribution, ZERO user risk -- it just costs double for
+               sampled requests. Shadow before canary is the ordering for model migrations:
+               shadow costs money, canary costs user risk.
+     WATCH: A forced deprecation migration run to a provider's deadline WITHOUT an evaluation
+            baseline -- you can only tell the new model is different, not whether it's worse.
+     SUMMARY: Run the candidate on sampled real traffic in parallel while the user still sees the
+              old output, so you get a real-distribution comparison at zero user risk -- shadow
+              always comes before canary in a model migration, since shadow only costs money
+              while canary costs user risk, and skipping it before a forced deprecation deadline
+              means shipping blind.
 
- 8. WATCH DASHBOARDS AND TRACES                          [8.5.5 / 8.5.8]
-    quality · retrieval · safety · cost · latency · agents · feedback
+  7. CANARY TO 5-10% IF SHADOW IS CLEAN                     [8.5.7]
+     DO: Route a small percentage of real users to the candidate, once shadow results are clean.
+     TOOLS: User-hash-based traffic splitting; canary metrics dashboard.
+     THIS RUN: 5-10% of real users routed to the candidate for a bake period.
+     REMEMBER: Hash the USER, not the request, so one person gets a consistent experience within
+               a session. Judge on METRICS, not silence -- "no complaints" measures how likely
+               users are to complain, not whether quality regressed.
+     NUMBERS: Canary 5-10%; bake hours to days.
+     WATCH: Canary success declared on absence of complaints instead of on the measured
+            scorecard.
+     SUMMARY: Route 5-10% of real users to the candidate, split by hashed user ID so each
+              person's experience stays consistent, and bake for hours to days -- judge success
+              on the measured scorecard, never on the absence of complaints, since silence
+              measures complaint tolerance, not quality.
 
- 9. ROLL FORWARD, ROLL BACK OR FIX                       [8.5.6 / 8.5.7]
-    rollback restores the WHOLE BUNDLE
+  8. WATCH DASHBOARDS AND TRACES                            [8.5.5 / 8.5.8]
+     DO: Monitor quality/retrieval/safety/cost/latency/agent/feedback dashboards and pull
+         individual traces when something looks wrong.
+     TOOLS: Dashboards; distributed tracing (OpenTelemetry GenAI spans, LangSmith, Azure AI
+            Foundry tracing); AI SLOs with alert thresholds.
+     THIS RUN: Canary watched against the AI SLO set; traces available to explain any individual
+               bad answer.
+     REMEMBER: Metrics tell you SOMETHING is wrong; traces show what happened in ONE case -- a
+               complaint is one answer, not a dashboard. AI SLOs cover behaviour, not just
+               uptime, and two are ZEROS: zero confirmed cross-user disclosures, zero writes
+               without approval -- availability can be green while answers are ungrounded. For an
+               agent, the trace is the ONLY record of the path, since control flow was chosen at
+               runtime.
+     NUMBERS: Alert causes: cache hit ratio <50% -> dynamic data in the prefix; retrieval
+              no-result spike -> index sync failure; p95 tool latency spike -> degraded
+              dependency; abstention dropping sharply -> grounding regression; injection
+              detections spiking -> attack or poisoned source; cost per request doubling ->
+              route/context regression.
+     WATCH: Traces enabled only in development. Sensitive content stored with broad developer
+            access, or outside the residency boundary. Alerts that fire with no owner and no
+            runbook.
+     SUMMARY: Watch the full dashboard set (quality, retrieval, safety, cost, latency, agents,
+              feedback) against AI SLOs that include two hard zeros (cross-user disclosure,
+              writes without approval), and pull the actual trace -- carrying prompt/model/index
+              version and chunk IDs -- whenever a metric or a complaint needs explaining, since
+              for an agent the trace is the only record of what path was actually taken.
+
+  9. ROLL FORWARD, ROLL BACK OR FIX                         [8.5.6 / 8.5.7]
+     DO: Decide to keep, revert or patch, restoring the WHOLE bundle on rollback, and run every
+         incident through triage before touching the model.
+     TOOLS: Bundle-level rollback; triage taxonomy (source content, ingestion, retrieval,
+            generation, tool, safety, UX) with named owners; regression-case addition to the
+            golden set.
+     THIS RUN: If canary metrics hold, roll forward to 100%; if not, roll back the entire bundle
+               (app+prompt+model route+index+tool schema) together, not just the app.
+     REMEMBER: Rollback restores the WHOLE BUNDLE -- restoring only the app produces a
+               combination that was never tested. The feedback loop runs through TRIAGE, not
+               straight into the model: pull the trace -> classify the failure layer -> assess
+               severity -> fix the right layer -> add a regression case permanently -> eval ->
+               canary -> close with evidence. Without failure-layer classification, every
+               incident becomes "the prompt needs improvement."
+     WATCH: Feedback used to fine-tune directly without filtering -- you teach the model the
+            mistakes of whoever complained loudest. Incidents fixed but never added to
+            regression tests, so they recur.
+     SUMMARY: On rollback restore the WHOLE bundle together, never just the app, since a partial
+              restore creates an untested combination -- and route every production failure
+              through triage (classify the failure layer, assign an owner, fix the right layer,
+              add a permanent regression case) rather than straight into a prompt tweak, or every
+              incident becomes "the prompt needs improvement" and nothing actually gets fixed.
+
+  TOPICS THAT ARE PART OF THIS STAGE BUT NOT DIRECT STEPS IN THIS REQUEST
+
+  N1. SLOs FOR AI SYSTEMS                                    [8.5.8]
+     WHERE: Standing definitions that step 8's dashboards and alerts are measured against, not a
+            release action itself.
+     WHY NOT A STEP: SLOs are set once (and revisited), not re-decided release by release; step 8
+                     watches against thresholds already fixed here.
+     TOOLS: Availability + quality + safety SLO set together; alert-to-cause mapping.
+     REMEMBER: Ordinary operational SLOs PLUS quality and safety SLOs, because the model can be
+               up and still ungrounded, unsafe, slow or expensive. Two rows are ZEROS, not
+               thresholds: cross-user disclosure and unapproved writes are binary, not a
+               percentage target.
+     NUMBERS: Availability 99.9% receive an answer/abstention/fallback; p95 RAG answer <4s, p95
+              TTFT <1s; hit rate@8 >=0.90; faithfulness >=0.90; tool selection >=95%; correct
+              abstention >=90%; golden set reviewed quarterly.
+     WATCH: Availability green while answers are ungrounded. Quality SLOs not tied to release
+            gates. Alerts firing with no owner or runbook.
+     SUMMARY: SLOs for an AI system must cover behaviour, not just uptime, including two hard
+              zeros (cross-user disclosure, unapproved writes) alongside the usual
+              availability/latency/quality targets -- otherwise a dashboard can stay green while
+              the system is quietly ungrounded, and an alert with no owner or runbook is not
+              really a control.
+
+  N2. TELEMETRY RETENTION POLICY                             [8.5.9]
+     WHERE: Governs what step 8's traces (and every other stage's logs) may contain and for how
+            long -- a standing policy, not a release action.
+     WHY NOT A STEP: Retention rules are set once per data class and enforced continuously, not
+                     decided per release.
+     TOOLS: Tiered retention (aggregated metrics long-lived/low sensitivity; raw
+            prompts/responses short/restricted; tool results and chunks minimized or IDs-only;
+            eval datasets governed like source data); export redaction.
+     REMEMBER: AI telemetry contains user questions, retrieved content, tool arguments and model
+               outputs -- it is NOT "just logs." Audit retention is separate from debug retention
+               and is often years, not weeks.
+     WATCH: Telemetry escaping the application's DLP/residency/access-control/deletion rules.
+            Debug logs becoming a shadow database of HR records. Eval examples copied from
+            production and kept forever. Deletion requests that ignore telemetry and caches.
+     SUMMARY: Treat telemetry as governed production data with tiered retention (short and
+              restricted for raw prompts/tool results, long only for aggregated metrics and
+              approval records), since it contains real user questions and retrieved content --
+              without deliberate rules, debug logs quietly become an ungoverned shadow database
+              of the same sensitive records the corpus was protecting.
+
+  N3. FEEDBACK LOOPS                                         [8.5.6]
+     WHERE: Runs continuously in production, not at release time -- its output (new golden-set
+            rows, prompt backlog, red-team cases) is the INPUT to the next release's step 1.
+     WHY NOT A STEP: It's an always-on production process, not something executed once per
+                     release cycle.
+     TOOLS: Triage taxonomy with named owners (source content, ingestion, retrieval, generation,
+            tool, safety, UX); signal sources (thumbs, free text, tickets, human labels,
+            automated eval failures).
+     REMEMBER: Turns production signals into CONTROLLED improvements -- explicitly not the same
+               as training on feedback automatically. Signal biases matter: thumbs are sparse and
+               negative-heavy, free text is noisy and may contain PII, tickets capture only
+               severe failures.
+     WATCH: Feedback used to fine-tune directly without filtering -- teaches the model the
+            mistakes of whoever complained loudest. The failure layer not classified, so
+            everything becomes "the prompt needs improvement." Corrections not tied back to the
+            original trace.
+     SUMMARY: Feedback loops run continuously in production and feed the NEXT release's candidate
+              config, not this one -- every signal must go through triage with a named owner per
+              failure layer before it becomes a fix, because unfiltered feedback teaches the
+              model the loudest complainer's mistakes instead of the actual problem.
+
+  N4. EVAL-DRIVEN DEVELOPMENT                                [8.5.10]
+     WHERE: The frame underneath every numbered step -- not a step itself, but the reason
+            releases are decided on measurement instead of impression.
+     WHY NOT A STEP: It's the governing principle the whole trace implements, already reflected
+                     in the "before the trace starts" callout.
+     TOOLS: Golden set + baseline run + one-change-at-a-time discipline; release scorecard
+            spanning retrieval, generation, agent tools, safety, Arabic/bilingual, latency, cost.
+     REMEMBER: TDD adapted to probabilistic systems -- not one expected string, but thresholds
+               over a representative dataset. The loop: define behaviour -> build golden set ->
+               run baseline -> make ONE change -> compare metrics -> inspect failures -> ship or
+               revert.
+     NUMBERS: Golden set 200-500; ~15% unanswerable; ~15% bilingual; thresholds ratchet UP only,
+              never down.
+     WATCH: The demo set treated as an eval set. A single judge score deciding a release.
+            Thresholds lowered just to pass. A better average hiding worse Arabic underneath it.
+     SUMMARY: Every step in this trace exists because eval-driven development replaces impression
+              with measurement -- define behaviour, build a golden set, run one change against a
+              pinned baseline, and only ratchet thresholds up, since a demo that looks good or a
+              single judge score deciding a release both defeat the entire discipline this stage
+              is built on.
 ```
 
 ### Every step, unpacked — the crux of each topic, as points, in execution order
